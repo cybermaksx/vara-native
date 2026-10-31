@@ -148,7 +148,9 @@ fn real_files_hold_one_mask_per_psk_level() {
         let found = masks_in(&words);
         let predicted: Vec<_> = psk_levels(bw).map(|l| (l.frame_cells().unwrap(), l.pilots().unwrap())).collect();
         assert_eq!(found[..predicted.len()], predicted[..], "{bw:?}");
-        // What follows belongs to the service frame: 11 carriers x 50 symbols, 4 pilots per carrier.
-        assert!(found[predicted.len()..].iter().all(|&m| m == (550, 44)), "{bw:?}");
+        // What follows belongs to service frames outside the published levels:
+        // 11 carriers x 50 symbols with 4 pilots each, and (500 Hz only) 2 carriers x 450 symbols with 18 each.
+        let service = [(550, 44), (900, 36)];
+        assert!(found[predicted.len()..].iter().all(|m| service.contains(m)), "{bw:?}: {:?}", &found[predicted.len()..]);
     }
 }

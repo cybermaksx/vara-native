@@ -82,13 +82,141 @@ fn bits_per_symbol() {
 }
 
 #[test]
-fn fsk_levels_carry_no_frame_map() {
+fn fsk_levels_carry_no_pilot_mask() {
     for bw in ALL {
         for l in levels(bw).iter().filter(|l| l.modulation == Fsk) {
-            assert_eq!((l.frame_symbols, l.pilots_per_carrier, l.frame_cells(), l.pilots()), (None, None, None, None));
+            assert_eq!((l.pilots_per_carrier, l.frame_cells(), l.pilots(), l.data_cells()), (None, None, None, None));
             assert!(l.carrier_freqs_hz.is_empty());
+            assert!(l.ofdm_bins().is_none());
         }
     }
+}
+
+// FSK frame lengths from the mode table; the .dat FSK maps hold exactly this many symbols.
+#[test]
+fn fsk_frame_lengths() {
+    let fsk = |bw| -> Vec<u16> { levels(bw).iter().filter(|l| l.modulation == Fsk).map(|l| l.frame_symbols.unwrap()).collect() };
+    assert_eq!(fsk(Bandwidth::Hz500), [124, 228, 226]);
+    assert_eq!(fsk(Bandwidth::Hz2300), [124, 228, 228, 395]);
+    assert_eq!(fsk(Bandwidth::Hz2750), [124, 228, 228, 395]);
+}
+
+// Symbol length in samples of the 3000 Hz baseband: 128/64/32 from the mode table, 72 = 64 + 8 for OFDM.
+#[test]
+fn symbol_rates_are_exact_fractions_of_3000_hz() {
+    for bw in ALL {
+        for l in levels(bw) {
+            let expected = match l.nominal_baud {
+                23 => 128,
+                47 => 64,
+                94 => 32,
+                42 => 72,
+                b => panic!("unexpected baud {b}"),
+            };
+            assert_eq!(l.samples_per_symbol, expected, "{bw:?} L{}", l.level);
+            assert_eq!(l.symbol_rate(), 3000.0 / expected as f64);
+            assert_eq!(l.symbol_rate().round() as u8, l.nominal_baud, "{bw:?} L{}", l.level);
+        }
+    }
+}
+
+// Information bits K and coded bits N per frame: the lengths of the B and A permutations in the .dat files.
+#[test]
+fn info_and_coded_bits_per_frame() {
+    let kn = |bw| -> Vec<(u32, u32)> { levels(bw).iter().map(|l| (l.info_bits, l.coded_bits)).collect() };
+    assert_eq!(kn(Bandwidth::Hz500), [
+        (96, 300), (200, 612), (297, 606), (368, 748), (744, 1500), (1080, 2172), (1578, 3168),
+        (2104, 3168), (2524, 3168), (3160, 4752), (3792, 4752), (4755, 5720), (5708, 7150),
+    ]);
+    assert_eq!(kn(Bandwidth::Hz2300), [
+        (96, 300), (200, 612), (402, 816), (736, 1484), (1080, 2172), (1410, 2832), (2076, 4164),
+        (2754, 5520), (3424, 6860), (7197, 14406), (9596, 14406), (11512, 14406), (14398, 21609),
+        (17276, 21609), (21710, 26068), (26056, 32585),
+    ]);
+    assert_eq!(kn(Bandwidth::Hz2750), [
+        (96, 300), (200, 612), (402, 816), (736, 1484), (1080, 2172), (1410, 2832), (2076, 4164),
+        (2754, 5520), (3424, 6860), (4466, 8944), (8667, 17346), (11556, 17346), (13864, 17346),
+        (17338, 26019), (20804, 26019), (26145, 31388), (31376, 39235),
+    ]);
+}
+
+// The strongest check we have: frame payload and frame duration reproduce every published net rate.
+#[test]
+fn info_bits_reproduce_published_net_rates() {
+    for bw in ALL {
+        for l in levels(bw) {
+            let duration = l.frame_symbols.unwrap() as f64 / l.symbol_rate();
+            let net = l.info_bits as f64 / duration;
+            assert!((net - l.net_bps as f64).abs() < 2.0, "{bw:?} L{}: {net:.1} vs {}", l.level, l.net_bps);
+        }
+    }
+}
+
+// N = K/R + 12 tail bits, K the largest value keeping K/R whole, the remainder (0..=4 bits) is padding.
+#[test]
+fn coded_length_follows_turbo_rule() {
+    for bw in ALL {
+        for l in levels(bw) {
+            let (num, den) = l.code_rate;
+            let (k, n) = (l.info_bits, l.coded_bits);
+            let coded = |k: u32| -> Option<u32> { (k * den as u32 % num as u32 == 0).then(|| k * den as u32 / num as u32 + 12) };
+            let used = coded(k).unwrap_or_else(|| panic!("{bw:?} L{}: K/R not whole", l.level));
+            assert!(used <= n && n - used <= 4, "{bw:?} L{}: padding {}", l.level, n as i64 - used as i64);
+            let next = (k + 1..).find_map(coded).unwrap();
+            assert!(next > n, "{bw:?} L{}: K is not maximal", l.level);
+        }
+    }
+}
+
+#[test]
+fn code_rates() {
+    let rates = |bw| -> Vec<(u8, u8)> { levels(bw).iter().map(|l| l.code_rate).collect() };
+    assert_eq!(rates(Bandwidth::Hz2300), [
+        (1, 3), (1, 3), (1, 2), (1, 2), (1, 2), (1, 2), (1, 2), (1, 2), (1, 2),
+        (1, 2), (2, 3), (4, 5), (2, 3), (4, 5), (5, 6), (4, 5),
+    ]);
+}
+
+// Data cells = coded bits / bits per symbol; every PSK/QAM frame reserves 1 cell per carrier besides pilots,
+// the 154-symbol 16QAM/32QAM frames reserve 20.
+#[test]
+fn data_cells() {
+    for bw in ALL {
+        for l in psk_levels(bw) {
+            let bits = l.modulation.bits_per_symbol().unwrap() as u32;
+            assert_eq!(l.coded_bits % bits, 0, "{bw:?} L{}", l.level);
+            assert_eq!(l.data_cells(), Some((l.coded_bits / bits) as usize));
+            let reserved = if matches!(l.modulation, Qam16 | Qam32) { 20 } else { 1 };
+            assert_eq!(
+                l.data_cells().unwrap(),
+                l.frame_cells().unwrap() - l.pilots().unwrap() - reserved * l.carriers as usize,
+                "{bw:?} L{}", l.level
+            );
+        }
+    }
+}
+
+// OFDM subcarrier k sits at k x 46.875 Hz; the block is contiguous and centred on bin 32 = 1500 Hz.
+#[test]
+fn ofdm_bins() {
+    let first = |bw| psk_levels(bw).find_map(|l| l.ofdm_bins()).map(|b| *b.start());
+    assert_eq!(first(Bandwidth::Hz500), Some(27));
+    assert_eq!(first(Bandwidth::Hz2300), Some(8));
+    assert_eq!(first(Bandwidth::Hz2750), Some(3));
+    for bw in ALL {
+        for l in psk_levels(bw) {
+            match l.ofdm_bins() {
+                Some(b) => {
+                    assert_eq!(l.nominal_baud, 42);
+                    assert_eq!(b.clone().count(), l.carriers as usize);
+                    assert_eq!(b.start() + b.end(), 64, "{bw:?} L{}", l.level);
+                }
+                None => assert_eq!(l.nominal_baud, 94),
+            }
+        }
+    }
+    assert_eq!(vara_native::modes::bin_frequency_hz(32), 1500.0);
+    assert_eq!(vara_native::modes::bin_frequency_hz(8), 375.0);
 }
 
 // Pilot masks found in the .dat files, in file order: (cells, pilots).

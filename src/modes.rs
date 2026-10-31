@@ -5,6 +5,7 @@
 //! and agree with the pilot masks in the .dat files (see doc/protocol.md, section 3).
 
 use crate::dat::Bandwidth;
+use std::ops::RangeInclusive;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Modulation {
@@ -23,7 +24,15 @@ pub struct SpeedLevel {
     /// Tones for FSK, subcarriers otherwise.
     pub carriers: u8,
     pub nominal_baud: u8,
+    /// Symbol length in samples of the 3000 Hz baseband.
+    pub samples_per_symbol: u8,
     pub net_bps: u16,
+    /// Information bits per frame (K).
+    pub info_bits: u32,
+    /// Coded bits per frame (N).
+    pub coded_bits: u32,
+    /// Turbo code rate as (numerator, denominator).
+    pub code_rate: (u8, u8),
     /// PSK/QAM only: symbols per frame on each carrier.
     pub frame_symbols: Option<u16>,
     /// PSK/QAM only: pilot symbols per carrier per frame.
@@ -54,6 +63,24 @@ impl SpeedLevel {
     pub fn pilots(&self) -> Option<usize> {
         self.pilots_per_carrier.map(|p| p as usize * self.carriers as usize)
     }
+
+    pub fn symbol_rate(&self) -> f64 {
+        todo!()
+    }
+
+    pub fn data_cells(&self) -> Option<usize> {
+        todo!()
+    }
+
+    /// FFT bins of the OFDM subcarriers; None on FSK and single-carrier levels.
+    pub fn ofdm_bins(&self) -> Option<RangeInclusive<u8>> {
+        todo!()
+    }
+}
+
+pub fn bin_frequency_hz(bin: u8) -> f64 {
+    let _ = bin;
+    todo!()
 }
 
 pub fn levels(bandwidth: Bandwidth) -> &'static [SpeedLevel] {
@@ -72,7 +99,11 @@ const fn fsk(level: u8, tones: u8, nominal_baud: u8, net_bps: u16) -> SpeedLevel
         modulation: Fsk,
         carriers: tones,
         nominal_baud,
+        samples_per_symbol: 0,
         net_bps,
+        info_bits: 0,
+        coded_bits: 0,
+        code_rate: (0, 0),
         frame_symbols: None,
         pilots_per_carrier: None,
         carrier_freqs_hz: &[],
@@ -86,7 +117,11 @@ const fn tones(level: u8, modulation: Modulation, net_bps: u16, frame_symbols: u
         modulation,
         carriers: freqs.len() as u8,
         nominal_baud: 94,
+        samples_per_symbol: 0,
         net_bps,
+        info_bits: 0,
+        coded_bits: 0,
+        code_rate: (0, 0),
         frame_symbols: Some(frame_symbols),
         pilots_per_carrier: Some(pilots),
         carrier_freqs_hz: freqs,
@@ -100,7 +135,11 @@ const fn ofdm(level: u8, modulation: Modulation, carriers: u8, net_bps: u16, fra
         modulation,
         carriers,
         nominal_baud: 42,
+        samples_per_symbol: 0,
         net_bps,
+        info_bits: 0,
+        coded_bits: 0,
+        code_rate: (0, 0),
         frame_symbols: Some(frame_symbols),
         pilots_per_carrier: Some(pilots),
         carrier_freqs_hz: &[],

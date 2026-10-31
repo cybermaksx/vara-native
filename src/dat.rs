@@ -99,15 +99,116 @@ pub enum LayoutError {
     TrailingWords { count: usize },
 }
 
+/// Pilot entries per FSK record (mode table field shared by every FSK record).
+const FSK_PILOTS: usize = 24;
+
+const SERVICE_11X50: RecordShape = RecordShape {
+    kind: ShapeKind::Psk { carriers: 11, frame_symbols: 50, pilots_per_carrier: 4 },
+    info_bits: 1704,
+    coded_bits: 2145,
+};
+
+/// Records after the speed levels; their purpose is not known yet.
+fn service_shapes(bandwidth: Bandwidth) -> &'static [RecordShape] {
+    match bandwidth {
+        Bandwidth::Hz500 => &[
+            RecordShape {
+                kind: ShapeKind::Psk { carriers: 2, frame_symbols: 450, pilots_per_carrier: 18 },
+                info_bits: 856,
+                coded_bits: 1724,
+            },
+            RecordShape { kind: ShapeKind::Fsk { frame_symbols: 92 }, info_bits: 64, coded_bits: 204 },
+            SERVICE_11X50,
+            SERVICE_11X50,
+        ],
+        Bandwidth::Hz2300 => &[SERVICE_11X50],
+        Bandwidth::Hz2750 => &[],
+    }
+}
+
 /// The 17 records of a table block, in file order: the speed levels, then service frames.
 pub fn record_shapes(bandwidth: Bandwidth) -> Vec<RecordShape> {
-    let _ = bandwidth;
-    todo!()
+    let levels = crate::modes::levels(bandwidth).iter().map(|l| {
+        let frame_symbols = l.frame_symbols.expect("every level has a frame length");
+        let kind = match l.pilots_per_carrier {
+            None => ShapeKind::Fsk { frame_symbols },
+            Some(pilots_per_carrier) => ShapeKind::Psk { carriers: l.carriers, frame_symbols, pilots_per_carrier },
+        };
+        RecordShape { kind, info_bits: l.info_bits, coded_bits: l.coded_bits }
+    });
+    levels.chain(service_shapes(bandwidth).iter().copied()).collect()
+}
+
+/// Sequential reader over the table words, in VARA's parse order.
+struct Cursor<'a> {
+    words: &'a [u16],
+    pos: usize,
+    record: usize,
+}
+
+impl<'a> Cursor<'a> {
+    fn take(&mut self, n: usize) -> Result<&'a [u16], LayoutError> {
+        let end = self.pos + n;
+        let out = self.words.get(self.pos..end).ok_or(LayoutError::Truncated { record: self.record })?;
+        self.pos = end;
+        Ok(out)
+    }
+
+    fn permutation(&mut self, n: u32, section: Section) -> Result<Vec<u16>, LayoutError> {
+        let p = self.take(n as usize)?;
+        let mut seen = vec![false; p.len()];
+        for &v in p {
+            match seen.get_mut(v as usize) {
+                Some(s) if !*s => *s = true,
+                _ => return Err(LayoutError::NotPermutation { record: self.record, section }),
+            }
+        }
+        Ok(p.to_vec())
+    }
 }
 
 impl ModemTables {
+    /// Walks the table block record by record; every word must belong to a record.
     pub fn records(&self) -> Result<Vec<Record>, LayoutError> {
-        todo!()
+        let mut cur = Cursor { words: &self.words, pos: 0, record: 0 };
+        let mut records = Vec::new();
+        for (i, shape) in record_shapes(self.bandwidth).into_iter().enumerate() {
+            cur.record = i;
+            let channel_interleaver = cur.permutation(shape.coded_bits, Section::ChannelInterleaver)?;
+            let info_interleaver = cur.permutation(shape.info_bits, Section::InfoInterleaver)?;
+            let body = match shape.kind {
+                ShapeKind::Psk { carriers, frame_symbols, pilots_per_carrier } => {
+                    let pilot_symbols = (0..carriers)
+                        .map(|_| cur.take(pilots_per_carrier as usize).map(<[u16]>::to_vec))
+                        .collect::<Result<_, _>>()?;
+                    let mask = (0..carriers)
+                        .map(|_| {
+                            cur.take(frame_symbols as usize)?
+                                .iter()
+                                .map(|&w| match w {
+                                    0 => Ok(false),
+                                    1 => Ok(true),
+                                    _ => Err(LayoutError::MaskNotBinary { record: i }),
+                                })
+                                .collect()
+                        })
+                        .collect::<Result<_, _>>()?;
+                    RecordBody::Psk { pilot_symbols, mask }
+                }
+                ShapeKind::Fsk { frame_symbols } => {
+                    let n = frame_symbols as usize;
+                    let map = cur.take(n)?.to_vec();
+                    let pilots = cur.take(FSK_PILOTS)?.to_vec();
+                    let pairs = cur.take(2 * n)?.chunks_exact(2).map(|p| (p[0], p[1])).collect();
+                    RecordBody::Fsk { map, pilots, pairs }
+                }
+            };
+            records.push(Record { channel_interleaver, info_interleaver, body });
+        }
+        match self.words.len() - cur.pos {
+            0 => Ok(records),
+            count => Err(LayoutError::TrailingWords { count }),
+        }
     }
 }
 

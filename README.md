@@ -105,7 +105,7 @@ This project exists only because the original author created the protocol and
 kept improving it for years. That deserves explicit respect:
 
 - It is an *independent, compatible implementation*, not a replacement claim
-  or a fork of anyone's binary.
+  or a fork of anyone's code.
 - It does not circumvent licensing, does not redistribute anyone else's
   work, and says so plainly wherever someone might reasonably wonder.
 - If you like what VARA does over the air, do what makes it possible —

@@ -52,6 +52,65 @@ impl Bandwidth {
     }
 }
 
+/// Size of one record in the table block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RecordShape {
+    pub kind: ShapeKind,
+    /// Length of the information interleaver (K).
+    pub info_bits: u32,
+    /// Length of the channel interleaver (N).
+    pub coded_bits: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShapeKind {
+    Fsk { frame_symbols: u16 },
+    Psk { carriers: u8, frame_symbols: u16, pilots_per_carrier: u8 },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Record {
+    /// Permutation of the N coded bits.
+    pub channel_interleaver: Vec<u16>,
+    /// Permutation of the K information bits.
+    pub info_interleaver: Vec<u16>,
+    pub body: RecordBody,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecordBody {
+    /// Per carrier: pilot symbol numbers in file order, and the pilot mask over the frame.
+    Psk { pilot_symbols: Vec<Vec<u16>>, mask: Vec<Vec<bool>> },
+    /// FSK tables, kept raw until their meaning is known.
+    Fsk { map: Vec<u16>, pilots: Vec<u16>, pairs: Vec<(u16, u16)> },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Section {
+    ChannelInterleaver,
+    InfoInterleaver,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum LayoutError {
+    NotPermutation { record: usize, section: Section },
+    MaskNotBinary { record: usize },
+    Truncated { record: usize },
+    TrailingWords { count: usize },
+}
+
+/// The 17 records of a table block, in file order: the speed levels, then service frames.
+pub fn record_shapes(bandwidth: Bandwidth) -> Vec<RecordShape> {
+    let _ = bandwidth;
+    todo!()
+}
+
+impl ModemTables {
+    pub fn records(&self) -> Result<Vec<Record>, LayoutError> {
+        todo!()
+    }
+}
+
 pub fn parse(bandwidth: Bandwidth, bytes: &[u8]) -> Result<ModemTables, DatError> {
     let expected = bandwidth.file_size();
     if bytes.len() != expected {

@@ -1,0 +1,14 @@
+# Working materials stay local, never published:
+NOTES.md
+work/
+installer/
+pcaps/
+scripts/
+
+# Extracted tables stay local (documented extraction, no redistribution):
+*.dat
+
+# Build artifacts:
+*.o
+*.so
+build/

@@ -101,13 +101,22 @@ fn call_events_alternate_strictly() {
 fn abort_during_transmission_matches_capture() {
     let mut s = Session::new(Timings::observed(), at(0.0));
     s.on_command(at(0.0), connect());
-    run_until(&mut s, PTT_ON[3] + 0.01); // into attempt 4, PTT is on
-    let abort_at = PTT_ON[3] + 0.503;
-    assert_eq!(s.on_command(at(abort_at), Command::Abort), [Event::Ok]);
+    // Into attempt 4: fire timers until its PTT ON.
+    let mut ptt_on_at = 0.0;
+    for _ in 0..3 {
+        loop {
+            let d = s.next_deadline().unwrap();
+            if s.on_timer(d).contains(&Event::PttOn) {
+                ptt_on_at = secs(d);
+                break;
+            }
+        }
+    }
+    assert_near(ptt_on_at, PTT_ON[3], "PTT ON #4");
+    assert_eq!(s.on_command(at(ptt_on_at + 0.503), Command::Abort), [Event::Ok]);
 
-    let fired = run_until(&mut s, 60.0);
+    let fired = run_until(&mut s, ptt_on_at + 10.0);
     assert_eq!(fired.len(), 2, "{fired:?}");
-    let ptt_on_at = PTT_ON[3];
     assert_eq!(fired[0].1, [Event::PttOff]);
     assert_near(fired[0].0 - ptt_on_at, 1.438, "frame length after ABORT");
     assert_eq!(fired[1].1, [Event::Disconnected, Event::BusyOff]);
@@ -155,5 +164,6 @@ fn timings_scale_for_fast_tests() {
     let mut s = Session::new(t, at(0.0));
     s.on_command(at(0.0), connect());
     let fired = run_until(&mut s, 1.0);
-    assert_near(fired.last().unwrap().0, DISCONNECTED * 0.01, "scaled DISCONNECTED");
+    let (t, _) = fired.iter().find(|(_, e)| e.contains(&Event::Disconnected)).unwrap();
+    assert_near(*t, DISCONNECTED * 0.01, "scaled DISCONNECTED");
 }

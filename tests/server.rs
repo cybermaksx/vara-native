@@ -1,5 +1,6 @@
 //! The command server over real loopback sockets, on a clock 100 times faster than the captures.
 
+use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::thread;
@@ -10,35 +11,52 @@ use vara_native::session::Timings;
 
 const SCALE: f64 = 0.01;
 
-fn start() -> (TcpStream, thread::JoinHandle<std::io::Result<()>>) {
+/// Test client: one line buffer for the whole connection, so lines that arrive together are never lost.
+struct Client {
+    stream: TcpStream,
+    reader: LineReader,
+    pending: VecDeque<(Duration, String)>,
+    t0: Instant,
+}
+
+impl Client {
+    fn send(&mut self, bytes: &[u8]) {
+        self.stream.write_all(bytes).unwrap();
+    }
+
+    /// Reads lines until `stop` is seen; returns them with arrival times. Fails after 5 s overall.
+    fn read_until(&mut self, stop: &str) -> Vec<(Duration, String)> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut out = Vec::new();
+        let mut buf = [0u8; 256];
+        loop {
+            while let Some((t, line)) = self.pending.pop_front() {
+                let done = line == stop;
+                out.push((t, line));
+                if done {
+                    return out;
+                }
+            }
+            assert!(Instant::now() < deadline, "no {stop:?} within 5 s; got {out:?}");
+            let n = self.stream.read(&mut buf).expect("server went silent");
+            assert!(n > 0, "server closed the connection");
+            let t = self.t0.elapsed();
+            self.pending.extend(self.reader.push(&buf[..n]).into_iter().map(|l| (t, l)));
+        }
+    }
+}
+
+fn start() -> (Client, thread::JoinHandle<std::io::Result<()>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let server = thread::spawn(move || {
         let (stream, _) = listener.accept()?;
         serve_client(stream, Timings::observed().scaled(SCALE))
     });
-    let client = TcpStream::connect(addr).unwrap();
-    client.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let stream = TcpStream::connect(addr).unwrap();
+    stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let client = Client { stream, reader: LineReader::default(), pending: VecDeque::new(), t0: Instant::now() };
     (client, server)
-}
-
-/// Reads lines until `stop` is seen; returns them with arrival times.
-fn read_until(client: &mut TcpStream, stop: &str) -> Vec<(Duration, String)> {
-    let t0 = Instant::now();
-    let mut reader = LineReader::default();
-    let mut out = Vec::new();
-    let mut buf = [0u8; 256];
-    loop {
-        let n = client.read(&mut buf).expect("server went silent");
-        assert!(n > 0, "server closed the connection");
-        for line in reader.push(&buf[..n]) {
-            let done = line == stop;
-            out.push((t0.elapsed(), line));
-            if done {
-                return out;
-            }
-        }
-    }
 }
 
 fn lines(v: &[(Duration, String)]) -> Vec<&str> {
@@ -48,17 +66,17 @@ fn lines(v: &[(Duration, String)]) -> Vec<&str> {
 #[test]
 fn acknowledges_commands() {
     let (mut c, _server) = start();
-    c.write_all(b"WINLINK SESSION\r").unwrap();
-    assert_eq!(lines(&read_until(&mut c, "OK")), ["OK"]);
-    c.write_all(b"BW2300\r").unwrap();
-    assert_eq!(lines(&read_until(&mut c, "OK")), ["OK"]);
+    c.send(b"WINLINK SESSION\r");
+    assert_eq!(lines(&c.read_until("OK")), ["OK"]);
+    c.send(b"BW2300\r");
+    assert_eq!(lines(&c.read_until("OK")), ["OK"]);
 }
 
 #[test]
 fn runs_an_unanswered_call_to_the_end() {
     let (mut c, _server) = start();
-    c.write_all(b"CONNECT N0CALL N1CALL\r").unwrap();
-    let got = read_until(&mut c, "BUSY OFF");
+    c.send(b"CONNECT N0CALL N1CALL\r");
+    let got = c.read_until("BUSY OFF");
 
     let mut expected = vec!["OK", "PTT ON", "BUSY ON", "PTT OFF"];
     for _ in 0..14 {
@@ -75,16 +93,16 @@ fn runs_an_unanswered_call_to_the_end() {
 #[test]
 fn abort_ends_the_call() {
     let (mut c, _server) = start();
-    c.write_all(b"CONNECT N0CALL N1CALL\r").unwrap();
-    read_until(&mut c, "BUSY ON");
-    c.write_all(b"ABORT\r").unwrap();
-    assert_eq!(lines(&read_until(&mut c, "BUSY OFF")), ["OK", "PTT OFF", "DISCONNECTED", "BUSY OFF"]);
+    c.send(b"CONNECT N0CALL N1CALL\r");
+    c.read_until("BUSY ON");
+    c.send(b"ABORT\r");
+    assert_eq!(lines(&c.read_until("BUSY OFF")), ["OK", "PTT OFF", "DISCONNECTED", "BUSY OFF"]);
 }
 
 #[test]
 fn sends_keepalives() {
     let (mut c, _server) = start();
-    let got = read_until(&mut c, "IAMALIVE");
+    let got = c.read_until("IAMALIVE");
     assert_eq!(lines(&got), ["IAMALIVE"]);
     let t = got[0].0.as_secs_f64();
     assert!((t - 60.0 * SCALE).abs() < 0.15, "first keepalive after {t:.3} s");
@@ -93,12 +111,11 @@ fn sends_keepalives() {
 #[test]
 fn handles_commands_split_across_writes() {
     let (mut c, _server) = start();
-    c.write_all(b"WINLINK SES").unwrap();
-    c.flush().unwrap();
+    c.send(b"WINLINK SES");
     thread::sleep(Duration::from_millis(20));
-    c.write_all(b"SION\rBW2300\r").unwrap();
-    assert_eq!(lines(&read_until(&mut c, "OK")), ["OK"]);
-    assert_eq!(lines(&read_until(&mut c, "OK")), ["OK"]);
+    c.send(b"SION\rBW2300\r");
+    assert_eq!(lines(&c.read_until("OK")), ["OK"]);
+    assert_eq!(lines(&c.read_until("OK")), ["OK"]);
 }
 
 #[test]

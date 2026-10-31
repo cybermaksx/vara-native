@@ -1,7 +1,7 @@
 //! Command channel (TCP 8300). Every byte string below was observed on the wire between
 //! Winlink Express and VARA HF 4.9.0; callsigns are replaced with placeholders.
 
-use vara_native::control::{Command, Event, LineReader};
+use vara_native::control::{Command, Event, LineReader, LineTooLong, MAX_LINE};
 use vara_native::dat::Bandwidth;
 
 #[test]
@@ -66,21 +66,62 @@ fn parses_modem_events() {
 #[test]
 fn line_reader_splits_on_cr() {
     let mut r = LineReader::default();
-    assert_eq!(r.push(b"OK\rPTT ON\rBUSY ON\r"), ["OK", "PTT ON", "BUSY ON"]);
-    assert!(r.push(b"PTT O").is_empty());
-    assert_eq!(r.push(b"FF\rDISCONN"), ["PTT OFF"]);
-    assert_eq!(r.push(b"ECTED\r"), ["DISCONNECTED"]);
+    assert_eq!(r.push(b"OK\rPTT ON\rBUSY ON\r").unwrap(), ["OK", "PTT ON", "BUSY ON"]);
+    assert!(r.push(b"PTT O").unwrap().is_empty());
+    assert_eq!(r.push(b"FF\rDISCONN").unwrap(), ["PTT OFF"]);
+    assert_eq!(r.push(b"ECTED\r").unwrap(), ["DISCONNECTED"]);
 }
 
 #[test]
 fn line_reader_does_not_treat_lf_as_terminator() {
     let mut r = LineReader::default();
-    assert!(r.push(b"OK\n").is_empty());
-    assert_eq!(r.push(b"\r"), ["OK\n"]);
+    assert!(r.push(b"OK\n").unwrap().is_empty());
+    assert_eq!(r.push(b"\r").unwrap(), ["OK\n"]);
 }
 
 #[test]
 fn line_reader_skips_empty_lines() {
     let mut r = LineReader::default();
-    assert_eq!(r.push(b"\r\rOK\r\r"), ["OK"]);
+    assert_eq!(r.push(b"\r\rOK\r\r").unwrap(), ["OK"]);
+}
+
+// A client that never sends CR must not grow the buffer without bound.
+#[test]
+fn line_reader_rejects_overlong_line() {
+    let mut r = LineReader::default();
+    assert_eq!(r.push(&vec![b'A'; MAX_LINE + 1]), Err(LineTooLong));
+}
+
+#[test]
+fn line_reader_accepts_a_line_at_the_limit() {
+    let mut r = LineReader::default();
+    let mut line = vec![b'A'; MAX_LINE];
+    line.push(b'\r');
+    assert_eq!(r.push(&line).unwrap(), [String::from_utf8(vec![b'A'; MAX_LINE]).unwrap()]);
+}
+
+#[test]
+fn line_reader_limit_holds_across_pushes() {
+    let mut r = LineReader::default();
+    for _ in 0..MAX_LINE {
+        assert!(r.push(b"A").unwrap().is_empty());
+    }
+    assert_eq!(r.push(b"A"), Err(LineTooLong));
+}
+
+// Completed lines free their space: the limit is per line, not per connection.
+#[test]
+fn line_reader_limit_is_per_line() {
+    let mut r = LineReader::default();
+    let mut chunk = vec![b'A'; MAX_LINE];
+    chunk.push(b'\r');
+    for _ in 0..100 {
+        assert_eq!(r.push(&chunk).unwrap().len(), 1);
+    }
+}
+
+// VARA's own commands are far below the limit.
+#[test]
+fn limit_leaves_room_for_real_commands() {
+    assert!(MAX_LINE >= 256);
 }

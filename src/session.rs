@@ -52,6 +52,12 @@ impl Timings {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimingsError {
+    ZeroKeepalive,
+    ZeroAttempts,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum State {
     Idle,
@@ -70,8 +76,8 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn new(timings: Timings, now: Duration) -> Session {
-        Session { timings, state: State::Idle, next_keepalive: now + timings.keepalive }
+    pub fn new(timings: Timings, now: Duration) -> Result<Session, TimingsError> {
+        Ok(Session { timings, state: State::Idle, next_keepalive: now + timings.keepalive })
     }
 
     pub fn on_command(&mut self, now: Duration, command: Command) -> Vec<Event> {

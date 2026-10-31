@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 use vara_native::control::{Command, Event};
-use vara_native::session::{Session, Timings};
+use vara_native::session::{Session, Timings, TimingsError};
 
 /// TCP and OS scheduling jitter in the captures; not a model parameter.
 const TOLERANCE: f64 = 0.050;
@@ -50,20 +50,20 @@ fn assert_near(got: f64, want: f64, what: &str) {
 
 #[test]
 fn idle_commands_are_acknowledged() {
-    let mut s = Session::new(Timings::observed(), at(0.0));
+    let mut s = Session::new(Timings::observed(), at(0.0)).unwrap();
     assert_eq!(s.on_command(at(0.0), Command::WinlinkSession), [Event::Ok]);
     assert_eq!(s.on_command(at(0.0), Command::Bandwidth(vara_native::dat::Bandwidth::Hz2300)), [Event::Ok]);
 }
 
 #[test]
 fn connect_answers_in_one_segment() {
-    let mut s = Session::new(Timings::observed(), at(0.0));
+    let mut s = Session::new(Timings::observed(), at(0.0)).unwrap();
     assert_eq!(s.on_command(at(0.0), connect()), [Event::Ok, Event::PttOn, Event::BusyOn]);
 }
 
 #[test]
 fn unanswered_call_matches_capture() {
-    let mut s = Session::new(Timings::observed(), at(0.0));
+    let mut s = Session::new(Timings::observed(), at(0.0)).unwrap();
     s.on_command(at(0.0), connect());
     let fired = run_until(&mut s, 50.0);
 
@@ -85,7 +85,7 @@ fn unanswered_call_matches_capture() {
 
 #[test]
 fn call_events_alternate_strictly() {
-    let mut s = Session::new(Timings::observed(), at(0.0));
+    let mut s = Session::new(Timings::observed(), at(0.0)).unwrap();
     s.on_command(at(0.0), connect());
     let seq: Vec<Event> = run_until(&mut s, 50.0).into_iter().flat_map(|(_, e)| e).collect();
     let mut expected = vec![Event::PttOff];
@@ -99,7 +99,7 @@ fn call_events_alternate_strictly() {
 // Capture 1: ABORT 0.503 s into a transmission. OK at once; the frame plays to its end; then hang up.
 #[test]
 fn abort_during_transmission_matches_capture() {
-    let mut s = Session::new(Timings::observed(), at(0.0));
+    let mut s = Session::new(Timings::observed(), at(0.0)).unwrap();
     s.on_command(at(0.0), connect());
     // Into attempt 4: fire timers until its PTT ON.
     let mut ptt_on_at = 0.0;
@@ -125,7 +125,7 @@ fn abort_during_transmission_matches_capture() {
 
 #[test]
 fn idle_after_call_accepts_a_new_call() {
-    let mut s = Session::new(Timings::observed(), at(0.0));
+    let mut s = Session::new(Timings::observed(), at(0.0)).unwrap();
     s.on_command(at(0.0), connect());
     run_until(&mut s, 50.0);
     assert_eq!(s.on_command(at(50.0), connect()), [Event::Ok, Event::PttOn, Event::BusyOn]);
@@ -134,7 +134,7 @@ fn idle_after_call_accepts_a_new_call() {
 // Capture 1: IAMALIVE every 60.0 s (59.985 .. 60.015) while idle.
 #[test]
 fn keepalive_every_60_s_when_idle() {
-    let mut s = Session::new(Timings::observed(), at(0.0));
+    let mut s = Session::new(Timings::observed(), at(0.0)).unwrap();
     let fired = run_until(&mut s, 300.0);
     let t: Vec<f64> = fired.iter().filter(|(_, e)| e == &[Event::IAmAlive]).map(|(t, _)| *t).collect();
     assert_eq!(t.len(), 5);
@@ -144,7 +144,7 @@ fn keepalive_every_60_s_when_idle() {
 // Assumption, not in the captures: none of the calls there overlapped a keepalive slot.
 #[test]
 fn no_keepalive_during_a_call() {
-    let mut s = Session::new(Timings::observed(), at(0.0));
+    let mut s = Session::new(Timings::observed(), at(0.0)).unwrap();
     run_until(&mut s, 59.0);
     s.on_command(at(59.0), connect());
     let fired = run_until(&mut s, 59.0 + DISCONNECTED - 0.5);
@@ -154,16 +154,40 @@ fn no_keepalive_during_a_call() {
 // Assumption until a capture shows VARA's answer (its strings include WRONG).
 #[test]
 fn unknown_commands_get_no_reply() {
-    let mut s = Session::new(Timings::observed(), at(0.0));
+    let mut s = Session::new(Timings::observed(), at(0.0)).unwrap();
     assert!(s.on_command(at(0.0), Command::Unknown("MYCALL N0CALL".into())).is_empty());
 }
 
 #[test]
 fn timings_scale_for_fast_tests() {
     let t = Timings::observed().scaled(0.01);
-    let mut s = Session::new(t, at(0.0));
+    let mut s = Session::new(t, at(0.0)).unwrap();
     s.on_command(at(0.0), connect());
     let fired = run_until(&mut s, 1.0);
     let (t, _) = fired.iter().find(|(_, e)| e.contains(&Event::Disconnected)).unwrap();
     assert_near(*t, DISCONNECTED * 0.01, "scaled DISCONNECTED");
+}
+
+// A zero keepalive interval would never advance the keepalive timer.
+#[test]
+fn zero_keepalive_is_rejected() {
+    let t = Timings { keepalive: Duration::ZERO, ..Timings::observed() };
+    assert_eq!(Session::new(t, at(0.0)).unwrap_err(), TimingsError::ZeroKeepalive);
+    assert_eq!(Session::new(Timings::observed().scaled(0.0), at(0.0)).unwrap_err(), TimingsError::ZeroKeepalive);
+}
+
+// Zero attempts would never match the attempt counter and overflow it.
+#[test]
+fn zero_attempts_is_rejected() {
+    let t = Timings { attempts: 0, ..Timings::observed() };
+    assert_eq!(Session::new(t, at(0.0)).unwrap_err(), TimingsError::ZeroAttempts);
+}
+
+#[test]
+fn single_attempt_call_ends_after_one_frame() {
+    let t = Timings { attempts: 1, ..Timings::observed() };
+    let mut s = Session::new(t, at(0.0)).unwrap();
+    s.on_command(at(0.0), connect());
+    let seq: Vec<Event> = run_until(&mut s, 10.0).into_iter().flat_map(|(_, e)| e).collect();
+    assert_eq!(seq, [Event::PttOff, Event::Disconnected, Event::BusyOff]);
 }

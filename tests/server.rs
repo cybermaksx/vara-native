@@ -41,7 +41,7 @@ impl Client {
             let n = self.stream.read(&mut buf).expect("server went silent");
             assert!(n > 0, "server closed the connection");
             let t = self.t0.elapsed();
-            self.pending.extend(self.reader.push(&buf[..n]).into_iter().map(|l| (t, l)));
+            self.pending.extend(self.reader.push(&buf[..n]).unwrap().into_iter().map(|l| (t, l)));
         }
     }
 }
@@ -123,4 +123,26 @@ fn returns_when_the_client_leaves() {
     let (c, server) = start();
     drop(c);
     assert!(server.join().unwrap().is_ok());
+}
+
+#[test]
+fn closes_a_client_that_never_ends_its_line() {
+    let (mut c, server) = start();
+    c.send(&vec![b'A'; vara_native::control::MAX_LINE + 1]);
+    let mut buf = [0u8; 16];
+    assert_eq!(c.stream.read(&mut buf).unwrap(), 0, "server should close the connection");
+    let err = server.join().unwrap().unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+}
+
+#[test]
+fn refuses_invalid_timings() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept()?;
+        serve_client(stream, Timings { keepalive: Duration::ZERO, ..Timings::observed() })
+    });
+    let _client = TcpStream::connect(addr).unwrap();
+    assert_eq!(server.join().unwrap().unwrap_err().kind(), std::io::ErrorKind::InvalidInput);
 }

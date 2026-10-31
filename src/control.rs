@@ -4,6 +4,9 @@ use crate::dat::Bandwidth;
 
 const CR: u8 = b'\r';
 
+/// Longest command line accepted, terminator excluded.
+pub const MAX_LINE: usize = 1024;
+
 /// Application to modem.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
@@ -96,6 +99,10 @@ fn terminated(line: &str) -> Vec<u8> {
     v
 }
 
+/// A line exceeded `MAX_LINE` bytes without a terminator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LineTooLong;
+
 /// Splits an incoming byte stream into lines.
 #[derive(Debug, Default)]
 pub struct LineReader {
@@ -103,14 +110,15 @@ pub struct LineReader {
 }
 
 impl LineReader {
-    pub fn push(&mut self, bytes: &[u8]) -> Vec<String> {
+    pub fn push(&mut self, bytes: &[u8]) -> Result<Vec<String>, LineTooLong> {
         self.buf.extend_from_slice(bytes);
-        let Some(last) = self.buf.iter().rposition(|&b| b == CR) else { return Vec::new() };
+        let Some(last) = self.buf.iter().rposition(|&b| b == CR) else { return Ok(Vec::new()) };
         let complete: Vec<u8> = self.buf.drain(..=last).collect();
-        complete
+        let lines = complete
             .split(|&b| b == CR)
             .filter(|l| !l.is_empty())
             .map(|l| String::from_utf8_lossy(l).into_owned())
-            .collect()
+            .collect::<Vec<_>>();
+        Ok(lines)
     }
 }

@@ -1,5 +1,7 @@
 //! Loader for the VARAHF500/2300/2750.dat modem tables.
 
+use crate::crc::crc16;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Bandwidth {
     Hz500,
@@ -25,15 +27,50 @@ pub struct ModemTables {
 impl Bandwidth {
     /// Exact file size VARA accepts.
     pub fn file_size(self) -> usize {
-        todo!()
+        match self {
+            Bandwidth::Hz500 => 734_771,
+            Bandwidth::Hz2300 => 720_716,
+            Bandwidth::Hz2750 => 872_206,
+        }
     }
 
     pub fn file_name(self) -> &'static str {
-        todo!()
+        match self {
+            Bandwidth::Hz500 => "VARAHF500.dat",
+            Bandwidth::Hz2300 => "VARAHF2300.dat",
+            Bandwidth::Hz2750 => "VARAHF2750.dat",
+        }
+    }
+
+    /// Length of the table block; the big-endian CRC follows it.
+    fn table_len(self) -> usize {
+        match self {
+            Bandwidth::Hz500 => 0x2dc00,
+            Bandwidth::Hz2300 => 0xaff4a,
+            Bandwidth::Hz2750 => 0xd4f0c,
+        }
     }
 }
 
 pub fn parse(bandwidth: Bandwidth, bytes: &[u8]) -> Result<ModemTables, DatError> {
-    let _ = (bandwidth, bytes);
-    todo!()
+    let expected = bandwidth.file_size();
+    if bytes.len() != expected {
+        return Err(DatError::WrongSize { expected, actual: bytes.len() });
+    }
+
+    let n = bandwidth.table_len();
+    let stored = u16::from_be_bytes([bytes[n], bytes[n + 1]]);
+    // VARA's loop stops one byte short, so the last table byte is not covered.
+    let computed = crc16(&bytes[..n - 1]);
+    if stored != computed {
+        return Err(DatError::BadCrc { stored, computed });
+    }
+
+    let words = bytes[..n]
+        .chunks_exact(2)
+        .map(|w| u16::from_be_bytes([w[0], w[1]]))
+        .collect();
+    let extra = bytes[n + 2..].to_vec();
+
+    Ok(ModemTables { bandwidth, words, extra })
 }

@@ -137,7 +137,7 @@ Per-bandwidth block boundaries:
 |---|---|---|---|
 | 500 Hz | `0x2DC00` (187 392) | `0x2DC00` | 547 377 bytes, no checksum |
 | 2300 Hz | `0xAFF4A` (720 714) | `0xAFF4A` | — |
-| 2750 Hz | `0xD4F0C` (872 206) | `0xD4F0C` | — |
+| 2750 Hz | `0xD4F0C` (872 204) | `0xD4F0C` | — |
 
 - For the 2300 and 2750 files the table block fills the file up to its final
   two bytes, which hold the CRC.
@@ -159,9 +159,9 @@ Per-bandwidth block boundaries:
   Trailing the permutations, all three blocks additionally end the covered
   region with two zero bytes (`0x0000` word) directly before the CRC.
 - **Beyond the permutations** the three files diverge and carry per-bandwidth
-  generation parameters. Their interpretation is under discussion in the
-  project working notes; the loader treats the block as opaque words,
-  exactly as documented here.
+  data. Part of it is now identified: one **pilot mask** per PSK/QAM speed
+  level, in level order (section 3.4). The words between the masks are not
+  yet interpreted; the loader keeps treating the whole block as opaque words.
 - The final data byte (position `n−1`) is inside `words` but outside the
   checksum scope (section 1.5).
 
@@ -215,7 +215,187 @@ assert_eq!(tables.words.len(), 0xAFF4A / 2);
 
 ---
 
-## 3. Running the test suite
+## 3. Speed levels (`src/modes.rs`, `tests/modes.rs`)
+
+Each bandwidth offers a ladder of speed levels, from robust FSK at the bottom
+to 32QAM OFDM at the top. `vara_native::modes::levels(bandwidth)` returns the
+ladder as a static slice of `SpeedLevel`, level 1 first.
+
+### 3.1 Where the numbers come from
+
+Two independent sources, each covering what the other cannot:
+
+| Source | Provides |
+|---|---|
+| Speed level table published by the VARA author (image shipped with the software, v4.3.0) | per level: nominal baud, carriers, modulation, net bit rate |
+| Mode table the original software builds in memory at startup | per level: bits per symbol, frame length, pilots per carrier, single-carrier frequencies |
+
+The two agree on every overlapping field (carriers and modulation of all 46
+levels). The second source is in turn confirmed by the table files: its frame
+sizes predict the pilot masks of section 3.4 exactly, in order, for all three
+bandwidths. A field enters `SpeedLevel` only when it is backed this way;
+fields whose meaning is still open stay out of the API (section 3.6).
+
+### 3.2 The ladders
+
+`carriers` means FSK tones on FSK levels and subcarriers elsewhere. Rates are
+the author's rounded figures (`nominal_baud`, `net_bps`).
+
+**500 Hz — 13 levels**
+
+| Level | Modulation | Carriers | Baud | Net bps | Frame symbols | Pilots / carrier |
+|---|---|---|---|---|---|---|
+| 1 | FSK | 11 | 23 | 18 | — | — |
+| 2 | FSK | 11 | 47 | 41 | — | — |
+| 3 | FSK | 11 | 47 | 61 | — | — |
+| 4 | BPSK | 2 | 94 | 88 | 393 | 18 |
+| 5 | QPSK | 2 | 94 | 177 | 394 | 18 |
+| 6 | QPSK | 3 | 94 | 270 | 375 | 12 |
+| 7–9 | QPSK | 11 | 42 | 441 / 588 / 705 | 149 | 4 |
+| 10–11 | 8PSK | 11 | 42 | 884 / 1060 | 149 | 4 |
+| 12 | 16QAM | 11 | 42 | 1286 | 154 | 4 |
+| 13 | 32QAM | 11 | 42 | 1543 | 154 | 4 |
+
+**2300 Hz — 16 levels**
+
+| Level | Modulation | Carriers | Baud | Net bps | Frame symbols | Pilots / carrier |
+|---|---|---|---|---|---|---|
+| 1 | FSK | 32 | 23 | 18 | — | — |
+| 2–3 | FSK | 16 | 47 | 41 / 82 | — | — |
+| 4 | FSK | 16 | 94 | 175 | — | — |
+| 5 | QPSK | 3 | 94 | 270 | 375 | 12 |
+| 6 | QPSK | 4 | 94 | 363 | 364 | 9 |
+| 7 | QPSK | 6 | 94 | 549 | 354 | 6 |
+| 8 | QPSK | 8 | 94 | 735 | 351 | 5 |
+| 9 | QPSK | 10 | 94 | 922 | 348 | 4 |
+| 10–12 | QPSK | 49 | 42 | 2011 / 2682 / 3219 | 149 | 1 |
+| 13–14 | 8PSK | 49 | 42 | 4025 / 4830 | 149 | 1 |
+| 15 | 16QAM | 49 | 42 | 5872 | 154 | 1 |
+| 16 | 32QAM | 49 | 42 | 7050 | 154 | 1 |
+
+**2750 Hz — 17 levels**
+
+| Level | Modulation | Carriers | Baud | Net bps | Frame symbols | Pilots / carrier |
+|---|---|---|---|---|---|---|
+| 1 | FSK | 40 | 23 | 18 | — | — |
+| 2–3 | FSK | 20 | 47 | 41 / 82 | — | — |
+| 4 | FSK | 20 | 94 | 175 | — | — |
+| 5–9 | QPSK | 3 / 4 / 6 / 8 / 10 | 94 | as 2300 L5–9 | as 2300 L5–9 | as 2300 L5–9 |
+| 10 | QPSK | 13 | 94 | 1203 | 348 | 3 |
+| 11–13 | QPSK | 59 | 42 | 2423 / 3230 / 3877 | 149 | 1 |
+| 14–15 | 8PSK | 59 | 42 | 4848 / 5817 | 149 | 1 |
+| 16 | 16QAM | 59 | 42 | 7074 | 154 | 1 |
+| 17 | 32QAM | 59 | 42 | 8489 | 154 | 1 |
+
+Tests: `level_counts`, `levels_are_numbered_from_one`,
+`matches_published_speed_table` (the author's table is restated in the test
+file as an independent copy), `net_rate_grows_with_level`.
+
+### 3.3 Bits per symbol
+
+| Modulation | Bits per symbol |
+|---|---|
+| FSK | — (not a constellation) |
+| BPSK | 1 |
+| QPSK | 2 |
+| 8PSK | 3 |
+| 16QAM | 4 |
+| 32QAM | 5 |
+
+These are the values the original mode table stores per level; they match
+the modulation names of the published table on every PSK/QAM level
+(`bits_per_symbol`).
+
+### 3.4 Frame maps and pilot masks
+
+Every PSK/QAM level transmits frames laid out as a grid of
+`frame_symbols × carriers` cells. Some cells carry known pilot symbols:
+`pilots_per_carrier × carriers` of them per frame.
+
+- `SpeedLevel::frame_cells()` = `frame_symbols × carriers`
+- `SpeedLevel::pilots()` = `pilots_per_carrier × carriers`
+- Both are `None` on FSK levels (`fsk_levels_carry_no_frame_map`).
+
+The original mode table stores the frame length **plus one**
+(e.g. 150 for a 149-symbol frame); `frame_symbols` holds the real length.
+
+**Observation.** The table files contain one mask per PSK/QAM level, in level
+order: a run of 16-bit words that are all `0` or `1`, whose length equals
+`frame_cells()` and whose count of ones equals `pilots()`. Example, 2300 Hz:
+
+| Level | Mask length | Ones | = frame symbols × carriers | = pilots / carrier × carriers |
+|---|---|---|---|---|
+| 5 | 1125 | 36 | 375 × 3 | 12 × 3 |
+| 6 | 1456 | 36 | 364 × 4 | 9 × 4 |
+| 7 | 2124 | 36 | 354 × 6 | 6 × 6 |
+| 8 | 2808 | 40 | 351 × 8 | 5 × 8 |
+| 9 | 3480 | 40 | 348 × 10 | 4 × 10 |
+| 10–14 | 7301 | 49 | 149 × 49 | 1 × 49 |
+| 15–16 | 7546 | 49 | 154 × 49 | 1 × 49 |
+
+The pilot count stays near-constant (36–49 cells) while the grid grows, so
+the pilot density falls as levels rise — expected for a design that spends
+pilots on weak signals and capacity on strong ones.
+
+Tests: `frame_maps_match_dat_masks` (self-contained, expected masks restated),
+`real_files_hold_one_mask_per_psk_level` (scans the real files; needs
+`VARA_DIR`).
+
+**Service frames.** After the level masks the files hold masks that belong to
+no published level:
+
+| Mask | Grid | Files |
+|---|---|---|
+| 550 cells, 44 pilots | 11 carriers × 50 symbols, 4 pilots each | 500 (twice), 2300 (once) |
+| 900 cells, 36 pilots | 2 carriers × 450 symbols, 18 pilots each | 500 |
+
+Both grids also exist as extra entries in the original mode table. They are
+presumed to be control frames (calls, acknowledgements, 500 Hz compatibility);
+see open question 4. `real_files_hold_one_mask_per_psk_level` accepts exactly
+these two shapes after the level masks and nothing else.
+
+### 3.5 Single-carrier frequencies
+
+The 94-baud PSK levels do not use OFDM: they send a handful of independent
+tones at fixed audio frequencies, listed in `carrier_freqs_hz`. The OFDM
+(42 baud) and FSK levels leave the list empty.
+
+| Bandwidth | Level | Carriers (Hz) | Spacing |
+|---|---|---|---|
+| 500 | 4, 5 | 1350, 1650 | 300 |
+| 500 | 6 | 1320, 1500, 1680 | 180 |
+| 2300 | 5 | 900, 1500, 2100 | 600 |
+| 2300 | 6 | 750 … 2250 | 500 |
+| 2300 | 7 | 700 … 2300 | 320 |
+| 2300 | 8 | 702 … 2298 | 228 |
+| 2300 | 9 | 555 … 2445 | 210 |
+| 2750 | 5 | 600, 1500, 2400 | 900 |
+| 2750 | 6 | 510 … 2490 | 660 |
+| 2750 | 7 | 450 … 2550 | 420 |
+| 2750 | 8 | 380 … 2620 | 320 |
+| 2750 | 9 | 375 … 2625 | 250 |
+| 2750 | 10 | 240 … 2760 | 210 |
+
+Every set is evenly spaced and centred on **1500 Hz** — the audio centre the
+author's guide gives for VARA (USB dial + 1500 Hz)
+(`single_carrier_frequencies_are_centred_and_even`).
+
+### 3.6 Deliberately left out
+
+The original mode table holds more per-level fields than `SpeedLevel`
+exposes. They stay out until a recording or a second source fixes their
+meaning:
+
+- a per-level SNR figure rising from about −13.6 dB (level 1) to +18 dB
+  (top level) — very likely the threshold for choosing a level;
+- FSK tone placement (first/last FFT bin) and samples-per-symbol figures that
+  point to a 3000 Hz complex baseband; this is a hypothesis until checked
+  against audio;
+- several per-level scaling constants of unknown role.
+
+---
+
+## 4. Running the test suite
 
 ```sh
 cargo test                # self-contained: synthetic files only
@@ -228,7 +408,7 @@ data — parsers, not tables.
 
 ---
 
-## 4. Open questions
+## 5. Open questions
 
 1. Do radio frames use this same CRC, and if so with the same off-by-one
    scope? Decide from recordings with known payloads. `src/dat.rs` stays
@@ -237,3 +417,11 @@ data — parsers, not tables.
    by any checksum, and unaccounted for; next step is recording evidence.
 3. Are the leading permutations really common-frame interleavers, and what
    is the role of the two zero words that precede the CRC in every block?
+4. What are the two service frame grids (11 × 50 and 2 × 450) used for, and
+   which audio frequencies do their carriers occupy?
+5. What lies between the pilot masks in the table files? The strongest lead
+   is forward error correction structure: its index ranges track the number
+   of coded bits per frame of each level. Not asserted anywhere yet.
+6. Exact symbol rates and OFDM subcarrier frequencies: the published baud
+   figures are rounded; the 3000 Hz baseband hypothesis (section 3.6) would
+   make them 23.4375 / 46.875 / 93.75 / 41.67 baud. Decide from recordings.

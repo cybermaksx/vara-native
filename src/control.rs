@@ -110,15 +110,21 @@ pub struct LineReader {
 }
 
 impl LineReader {
+    /// Each byte is looked at once, and the unfinished line never exceeds `MAX_LINE`.
     pub fn push(&mut self, bytes: &[u8]) -> Result<Vec<String>, LineTooLong> {
-        self.buf.extend_from_slice(bytes);
-        let Some(last) = self.buf.iter().rposition(|&b| b == CR) else { return Ok(Vec::new()) };
-        let complete: Vec<u8> = self.buf.drain(..=last).collect();
-        let lines = complete
-            .split(|&b| b == CR)
-            .filter(|l| !l.is_empty())
-            .map(|l| String::from_utf8_lossy(l).into_owned())
-            .collect::<Vec<_>>();
+        let mut lines = Vec::new();
+        for &b in bytes {
+            if b == CR {
+                if !self.buf.is_empty() {
+                    lines.push(String::from_utf8_lossy(&self.buf).into_owned());
+                    self.buf.clear();
+                }
+            } else if self.buf.len() == MAX_LINE {
+                return Err(LineTooLong);
+            } else {
+                self.buf.push(b);
+            }
+        }
         Ok(lines)
     }
 }

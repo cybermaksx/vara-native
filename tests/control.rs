@@ -120,8 +120,5 @@ fn line_reader_limit_is_per_line() {
     }
 }
 
-// VARA's own commands are far below the limit.
-#[test]
-fn limit_leaves_room_for_real_commands() {
-    assert!(MAX_LINE >= 256);
-}
+// VARA's own commands are far below the limit; checked at compile time.
+const _: () = assert!(MAX_LINE >= 256);

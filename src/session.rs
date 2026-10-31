@@ -76,7 +76,15 @@ pub struct Session {
 }
 
 impl Session {
+    /// Rejects timings that could not make progress: the keepalive timer must advance and a call
+    /// must end after a finite number of frames.
     pub fn new(timings: Timings, now: Duration) -> Result<Session, TimingsError> {
+        if timings.keepalive.is_zero() {
+            return Err(TimingsError::ZeroKeepalive);
+        }
+        if timings.attempts == 0 {
+            return Err(TimingsError::ZeroAttempts);
+        }
         Ok(Session { timings, state: State::Idle, next_keepalive: now + timings.keepalive })
     }
 

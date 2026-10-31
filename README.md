@@ -53,7 +53,7 @@ This project is built on a few deliberate commitments.
 The goal is not to look like the original — the goal is to **interoperate**
 with it on the air, byte for byte, and to do so by understanding what the
 protocol *does*, not by copying anything it *is*. Every behavior is described
-first in plain language (see `NOTES` and the `doc/` directory), and the code
+first in plain language (see the `doc/` directory), and the code
 is written against that description. The specification is the shared language;
 the implementation follows from it.
 

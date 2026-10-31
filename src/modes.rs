@@ -2,10 +2,20 @@
 //!
 //! Rates and modulations follow the speed level table published by the VARA author; frame map
 //! sizes, pilot counts and carrier frequencies follow the mode table built at startup by VARA.exe
-//! and agree with the pilot masks in the .dat files (see doc/protocol.md, section 3).
+//! and agree with the pilot masks in the .dat files. K and N are the lengths of the two
+//! permutations stored per level in the .dat files (see doc/protocol.md, section 3).
 
 use crate::dat::Bandwidth;
 use std::ops::RangeInclusive;
+
+/// Sample rate of the internal complex baseband.
+pub const BASEBAND_HZ: f64 = 3000.0;
+/// FFT length of the OFDM levels at the baseband rate.
+pub const OFDM_FFT: u8 = 64;
+/// Cyclic prefix of the OFDM levels, in baseband samples.
+pub const OFDM_CP: u8 = 8;
+/// Spacing of FFT bins: 3000 / 64.
+pub const BIN_HZ: f64 = BASEBAND_HZ / OFDM_FFT as f64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Modulation {
@@ -33,12 +43,14 @@ pub struct SpeedLevel {
     pub coded_bits: u32,
     /// Turbo code rate as (numerator, denominator).
     pub code_rate: (u8, u8),
-    /// PSK/QAM only: symbols per frame on each carrier.
+    /// Symbols per frame on each carrier.
     pub frame_symbols: Option<u16>,
     /// PSK/QAM only: pilot symbols per carrier per frame.
     pub pilots_per_carrier: Option<u8>,
     /// Single-carrier PSK levels only; empty for FSK and OFDM levels.
     pub carrier_freqs_hz: &'static [u16],
+    /// OFDM levels only: FFT bin of the lowest subcarrier.
+    first_bin: Option<u8>,
 }
 
 impl Modulation {
@@ -55,9 +67,15 @@ impl Modulation {
 }
 
 impl SpeedLevel {
-    /// Cells in the frame map (symbols x carriers).
+    fn has_pilot_mask(&self) -> bool {
+        self.modulation != Modulation::Fsk
+    }
+
+    /// Cells in the frame map (symbols x carriers); PSK/QAM only.
     pub fn frame_cells(&self) -> Option<usize> {
-        self.frame_symbols.map(|s| s as usize * self.carriers as usize)
+        self.has_pilot_mask()
+            .then(|| self.frame_symbols.map(|s| s as usize * self.carriers as usize))
+            .flatten()
     }
 
     pub fn pilots(&self) -> Option<usize> {
@@ -65,22 +83,23 @@ impl SpeedLevel {
     }
 
     pub fn symbol_rate(&self) -> f64 {
-        todo!()
+        BASEBAND_HZ / self.samples_per_symbol as f64
     }
 
+    /// Cells carrying coded bits; PSK/QAM only.
     pub fn data_cells(&self) -> Option<usize> {
-        todo!()
+        let bits = self.modulation.bits_per_symbol()?;
+        Some((self.coded_bits / bits as u32) as usize)
     }
 
     /// FFT bins of the OFDM subcarriers; None on FSK and single-carrier levels.
     pub fn ofdm_bins(&self) -> Option<RangeInclusive<u8>> {
-        todo!()
+        self.first_bin.map(|b| b..=b + self.carriers - 1)
     }
 }
 
 pub fn bin_frequency_hz(bin: u8) -> f64 {
-    let _ = bin;
-    todo!()
+    bin as f64 * BIN_HZ
 }
 
 pub fn levels(bandwidth: Bandwidth) -> &'static [SpeedLevel] {
@@ -93,110 +112,127 @@ pub fn levels(bandwidth: Bandwidth) -> &'static [SpeedLevel] {
 
 use Modulation::*;
 
-const fn fsk(level: u8, tones: u8, nominal_baud: u8, net_bps: u16) -> SpeedLevel {
+/// Frame payload: (K, N, code rate).
+type Fec = (u32, u32, (u8, u8));
+
+const fn fsk(level: u8, tones: u8, nominal_baud: u8, net_bps: u16, frame_symbols: u16, fec: Fec) -> SpeedLevel {
+    let samples_per_symbol = match nominal_baud {
+        23 => 128,
+        47 => 64,
+        _ => 32,
+    };
     SpeedLevel {
         level,
         modulation: Fsk,
         carriers: tones,
         nominal_baud,
-        samples_per_symbol: 0,
+        samples_per_symbol,
         net_bps,
-        info_bits: 0,
-        coded_bits: 0,
-        code_rate: (0, 0),
-        frame_symbols: None,
+        info_bits: fec.0,
+        coded_bits: fec.1,
+        code_rate: fec.2,
+        frame_symbols: Some(frame_symbols),
         pilots_per_carrier: None,
         carrier_freqs_hz: &[],
+        first_bin: None,
     }
 }
 
 /// Single-carrier PSK level at 94 baud, one tone per listed frequency.
-const fn tones(level: u8, modulation: Modulation, net_bps: u16, frame_symbols: u16, pilots: u8, freqs: &'static [u16]) -> SpeedLevel {
+const fn tones(level: u8, modulation: Modulation, net_bps: u16, frame_symbols: u16, pilots: u8, freqs: &'static [u16], fec: Fec) -> SpeedLevel {
     SpeedLevel {
         level,
         modulation,
         carriers: freqs.len() as u8,
         nominal_baud: 94,
-        samples_per_symbol: 0,
+        samples_per_symbol: 32,
         net_bps,
-        info_bits: 0,
-        coded_bits: 0,
-        code_rate: (0, 0),
+        info_bits: fec.0,
+        coded_bits: fec.1,
+        code_rate: fec.2,
         frame_symbols: Some(frame_symbols),
         pilots_per_carrier: Some(pilots),
         carrier_freqs_hz: freqs,
+        first_bin: None,
     }
 }
 
-/// OFDM level at 42 baud.
-const fn ofdm(level: u8, modulation: Modulation, carriers: u8, net_bps: u16, frame_symbols: u16, pilots: u8) -> SpeedLevel {
+/// OFDM level at 42 baud, subcarriers on contiguous FFT bins centred on bin 32.
+const fn ofdm(level: u8, modulation: Modulation, carriers: u8, net_bps: u16, frame_symbols: u16, pilots: u8, fec: Fec) -> SpeedLevel {
     SpeedLevel {
         level,
         modulation,
         carriers,
         nominal_baud: 42,
-        samples_per_symbol: 0,
+        samples_per_symbol: OFDM_FFT + OFDM_CP,
         net_bps,
-        info_bits: 0,
-        coded_bits: 0,
-        code_rate: (0, 0),
+        info_bits: fec.0,
+        coded_bits: fec.1,
+        code_rate: fec.2,
         frame_symbols: Some(frame_symbols),
         pilots_per_carrier: Some(pilots),
         carrier_freqs_hz: &[],
+        first_bin: Some(OFDM_FFT / 2 - (carriers - 1) / 2),
     }
 }
 
+const R13: (u8, u8) = (1, 3);
+const R12: (u8, u8) = (1, 2);
+const R23: (u8, u8) = (2, 3);
+const R45: (u8, u8) = (4, 5);
+const R56: (u8, u8) = (5, 6);
+
 const LEVELS_500: &[SpeedLevel] = &[
-    fsk(1, 11, 23, 18),
-    fsk(2, 11, 47, 41),
-    fsk(3, 11, 47, 61),
-    tones(4, Bpsk, 88, 393, 18, &[1350, 1650]),
-    tones(5, Qpsk, 177, 394, 18, &[1350, 1650]),
-    tones(6, Qpsk, 270, 375, 12, &[1320, 1500, 1680]),
-    ofdm(7, Qpsk, 11, 441, 149, 4),
-    ofdm(8, Qpsk, 11, 588, 149, 4),
-    ofdm(9, Qpsk, 11, 705, 149, 4),
-    ofdm(10, Psk8, 11, 884, 149, 4),
-    ofdm(11, Psk8, 11, 1060, 149, 4),
-    ofdm(12, Qam16, 11, 1286, 154, 4),
-    ofdm(13, Qam32, 11, 1543, 154, 4),
+    fsk(1, 11, 23, 18, 124, (96, 300, R13)),
+    fsk(2, 11, 47, 41, 228, (200, 612, R13)),
+    fsk(3, 11, 47, 61, 226, (297, 606, R12)),
+    tones(4, Bpsk, 88, 393, 18, &[1350, 1650], (368, 748, R12)),
+    tones(5, Qpsk, 177, 394, 18, &[1350, 1650], (744, 1500, R12)),
+    tones(6, Qpsk, 270, 375, 12, &[1320, 1500, 1680], (1080, 2172, R12)),
+    ofdm(7, Qpsk, 11, 441, 149, 4, (1578, 3168, R12)),
+    ofdm(8, Qpsk, 11, 588, 149, 4, (2104, 3168, R23)),
+    ofdm(9, Qpsk, 11, 705, 149, 4, (2524, 3168, R45)),
+    ofdm(10, Psk8, 11, 884, 149, 4, (3160, 4752, R23)),
+    ofdm(11, Psk8, 11, 1060, 149, 4, (3792, 4752, R45)),
+    ofdm(12, Qam16, 11, 1286, 154, 4, (4755, 5720, R56)),
+    ofdm(13, Qam32, 11, 1543, 154, 4, (5708, 7150, R45)),
 ];
 
 const LEVELS_2300: &[SpeedLevel] = &[
-    fsk(1, 32, 23, 18),
-    fsk(2, 16, 47, 41),
-    fsk(3, 16, 47, 82),
-    fsk(4, 16, 94, 175),
-    tones(5, Qpsk, 270, 375, 12, &[900, 1500, 2100]),
-    tones(6, Qpsk, 363, 364, 9, &[750, 1250, 1750, 2250]),
-    tones(7, Qpsk, 549, 354, 6, &[700, 1020, 1340, 1660, 1980, 2300]),
-    tones(8, Qpsk, 735, 351, 5, &[702, 930, 1158, 1386, 1614, 1842, 2070, 2298]),
-    tones(9, Qpsk, 922, 348, 4, &[555, 765, 975, 1185, 1395, 1605, 1815, 2025, 2235, 2445]),
-    ofdm(10, Qpsk, 49, 2011, 149, 1),
-    ofdm(11, Qpsk, 49, 2682, 149, 1),
-    ofdm(12, Qpsk, 49, 3219, 149, 1),
-    ofdm(13, Psk8, 49, 4025, 149, 1),
-    ofdm(14, Psk8, 49, 4830, 149, 1),
-    ofdm(15, Qam16, 49, 5872, 154, 1),
-    ofdm(16, Qam32, 49, 7050, 154, 1),
+    fsk(1, 32, 23, 18, 124, (96, 300, R13)),
+    fsk(2, 16, 47, 41, 228, (200, 612, R13)),
+    fsk(3, 16, 47, 82, 228, (402, 816, R12)),
+    fsk(4, 16, 94, 175, 395, (736, 1484, R12)),
+    tones(5, Qpsk, 270, 375, 12, &[900, 1500, 2100], (1080, 2172, R12)),
+    tones(6, Qpsk, 363, 364, 9, &[750, 1250, 1750, 2250], (1410, 2832, R12)),
+    tones(7, Qpsk, 549, 354, 6, &[700, 1020, 1340, 1660, 1980, 2300], (2076, 4164, R12)),
+    tones(8, Qpsk, 735, 351, 5, &[702, 930, 1158, 1386, 1614, 1842, 2070, 2298], (2754, 5520, R12)),
+    tones(9, Qpsk, 922, 348, 4, &[555, 765, 975, 1185, 1395, 1605, 1815, 2025, 2235, 2445], (3424, 6860, R12)),
+    ofdm(10, Qpsk, 49, 2011, 149, 1, (7197, 14406, R12)),
+    ofdm(11, Qpsk, 49, 2682, 149, 1, (9596, 14406, R23)),
+    ofdm(12, Qpsk, 49, 3219, 149, 1, (11512, 14406, R45)),
+    ofdm(13, Psk8, 49, 4025, 149, 1, (14398, 21609, R23)),
+    ofdm(14, Psk8, 49, 4830, 149, 1, (17276, 21609, R45)),
+    ofdm(15, Qam16, 49, 5872, 154, 1, (21710, 26068, R56)),
+    ofdm(16, Qam32, 49, 7050, 154, 1, (26056, 32585, R45)),
 ];
 
 const LEVELS_2750: &[SpeedLevel] = &[
-    fsk(1, 40, 23, 18),
-    fsk(2, 20, 47, 41),
-    fsk(3, 20, 47, 82),
-    fsk(4, 20, 94, 175),
-    tones(5, Qpsk, 270, 375, 12, &[600, 1500, 2400]),
-    tones(6, Qpsk, 363, 364, 9, &[510, 1170, 1830, 2490]),
-    tones(7, Qpsk, 549, 354, 6, &[450, 870, 1290, 1710, 2130, 2550]),
-    tones(8, Qpsk, 735, 351, 5, &[380, 700, 1020, 1340, 1660, 1980, 2300, 2620]),
-    tones(9, Qpsk, 922, 348, 4, &[375, 625, 875, 1125, 1375, 1625, 1875, 2125, 2375, 2625]),
-    tones(10, Qpsk, 1203, 348, 3, &[240, 450, 660, 870, 1080, 1290, 1500, 1710, 1920, 2130, 2340, 2550, 2760]),
-    ofdm(11, Qpsk, 59, 2423, 149, 1),
-    ofdm(12, Qpsk, 59, 3230, 149, 1),
-    ofdm(13, Qpsk, 59, 3877, 149, 1),
-    ofdm(14, Psk8, 59, 4848, 149, 1),
-    ofdm(15, Psk8, 59, 5817, 149, 1),
-    ofdm(16, Qam16, 59, 7074, 154, 1),
-    ofdm(17, Qam32, 59, 8489, 154, 1),
+    fsk(1, 40, 23, 18, 124, (96, 300, R13)),
+    fsk(2, 20, 47, 41, 228, (200, 612, R13)),
+    fsk(3, 20, 47, 82, 228, (402, 816, R12)),
+    fsk(4, 20, 94, 175, 395, (736, 1484, R12)),
+    tones(5, Qpsk, 270, 375, 12, &[600, 1500, 2400], (1080, 2172, R12)),
+    tones(6, Qpsk, 363, 364, 9, &[510, 1170, 1830, 2490], (1410, 2832, R12)),
+    tones(7, Qpsk, 549, 354, 6, &[450, 870, 1290, 1710, 2130, 2550], (2076, 4164, R12)),
+    tones(8, Qpsk, 735, 351, 5, &[380, 700, 1020, 1340, 1660, 1980, 2300, 2620], (2754, 5520, R12)),
+    tones(9, Qpsk, 922, 348, 4, &[375, 625, 875, 1125, 1375, 1625, 1875, 2125, 2375, 2625], (3424, 6860, R12)),
+    tones(10, Qpsk, 1203, 348, 3, &[240, 450, 660, 870, 1080, 1290, 1500, 1710, 1920, 2130, 2340, 2550, 2760], (4466, 8944, R12)),
+    ofdm(11, Qpsk, 59, 2423, 149, 1, (8667, 17346, R12)),
+    ofdm(12, Qpsk, 59, 3230, 149, 1, (11556, 17346, R23)),
+    ofdm(13, Qpsk, 59, 3877, 149, 1, (13864, 17346, R45)),
+    ofdm(14, Psk8, 59, 4848, 149, 1, (17338, 26019, R23)),
+    ofdm(15, Psk8, 59, 5817, 149, 1, (20804, 26019, R45)),
+    ofdm(16, Qam16, 59, 7074, 154, 1, (26145, 31388, R56)),
+    ofdm(17, Qam32, 59, 8489, 154, 1, (31376, 39235, R45)),
 ];

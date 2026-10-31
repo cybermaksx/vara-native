@@ -159,7 +159,7 @@ fn coded_length_follows_turbo_rule() {
         for l in levels(bw) {
             let (num, den) = l.code_rate;
             let (k, n) = (l.info_bits, l.coded_bits);
-            let coded = |k: u32| -> Option<u32> { (k * den as u32 % num as u32 == 0).then(|| k * den as u32 / num as u32 + 12) };
+            let coded = |k: u32| -> Option<u32> { (k * den as u32).is_multiple_of(num as u32).then(|| k * den as u32 / num as u32 + 12) };
             let used = coded(k).unwrap_or_else(|| panic!("{bw:?} L{}: K/R not whole", l.level));
             assert!(used <= n && n - used <= 4, "{bw:?} L{}: padding {}", l.level, n as i64 - used as i64);
             let next = (k + 1..).find_map(coded).unwrap();

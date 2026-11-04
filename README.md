@@ -92,10 +92,10 @@ repository ships **parsers, not tables**:
 - The tables themselves are never committed or redistributed.
 
 This keeps the repository fully self-describing, and gives every user a
-legitimate, self-service path to a working setup. (Unregistered operation of
-the protocol comes with reduced speed; this project honors that distinction
-by design and includes no mechanism to bypass it. Full speed remains,
-rightly, a matter between the user and the original author.)
+legitimate, self-service path to a working setup. (This project does not
+touch the original software's licensing and contains nothing that unlocks or
+bypasses it. Registering the original software remains a matter between its
+users and its author.)
 
 ### 4. Small, boring, readable
 

@@ -114,3 +114,40 @@ fn first_bit_is_most_significant() {
     assert_eq!(index_msb_first(&[1, 1, 0, 1, 0]), Ok(26));
     assert_eq!(index_msb_first(&[1, 2]), Err(MappingError::NotABit));
 }
+
+// Raw f32 bit patterns of VARA's constellation table (0x3e84bf5d also appears as an immediate in its code).
+#[test]
+fn table_values_are_bit_exact() {
+    let vara: [&[(u32, u32)]; 5] = [
+        &[
+            (0x3f800000, 0x00000000), (0xbf800000, 0x2768d313),
+        ],
+        &[
+            (0x3f800000, 0x00000000), (0x26e8d313, 0x3f800000), (0xa7a69e4e, 0xbf800000), (0xbf800000, 0x2768d313),
+        ],
+        &[
+            (0x3f800000, 0x00000000), (0x3f3504f3, 0x3f3504f3), (0xbf3504f3, 0x3f3504f3), (0x26e8d313, 0x3f800000),
+            (0x3f3504f3, 0xbf3504f3), (0xa7a69e4e, 0xbf800000), (0xbf800000, 0x2768d313), (0xbf3504f3, 0xbf3504f3),
+        ],
+        &[
+            (0xbf471f0c, 0xbf471f0c), (0xbf471f0c, 0xbe84bf5d), (0xbf471f0c, 0x3f471f0c), (0xbf471f0c, 0x3e84bf5d),
+            (0xbe84bf5d, 0xbf471f0c), (0xbe84bf5d, 0xbe84bf5d), (0xbe84bf5d, 0x3f471f0c), (0xbe84bf5d, 0x3e84bf5d),
+            (0x3f471f0c, 0xbf471f0c), (0x3f471f0c, 0xbe84bf5d), (0x3f471f0c, 0x3f471f0c), (0x3f471f0c, 0x3e84bf5d),
+            (0x3e84bf5d, 0xbf471f0c), (0x3e84bf5d, 0xbe84bf5d), (0x3e84bf5d, 0x3f471f0c), (0x3e84bf5d, 0x3e84bf5d),
+        ],
+        &[
+            (0x3e593924, 0x3e593924), (0x3f22eadb, 0x3e593924), (0x3f22eadb, 0x3f87c3b6), (0x3f87c3b6, 0x3e593924),
+            (0x3e593924, 0x3f22eadb), (0x3f22eadb, 0x3f22eadb), (0x3e593924, 0x3f87c3b6), (0x3f87c3b6, 0x3f22eadb),
+            (0x3e593924, 0xbe593924), (0x3f22eadb, 0xbe593924), (0x3f22eadb, 0xbf87c3b6), (0x3f87c3b6, 0xbe593924),
+            (0x3e593924, 0xbf22eadb), (0x3f22eadb, 0xbf22eadb), (0x3e593924, 0xbf87c3b6), (0x3f87c3b6, 0xbf22eadb),
+            (0xbe593924, 0x3e593924), (0xbf22eadb, 0x3e593924), (0xbf22eadb, 0x3f87c3b6), (0xbf87c3b6, 0x3e593924),
+            (0xbe593924, 0x3f22eadb), (0xbf22eadb, 0x3f22eadb), (0xbe593924, 0x3f87c3b6), (0xbf87c3b6, 0x3f22eadb),
+            (0xbe593924, 0xbe593924), (0xbf22eadb, 0xbe593924), (0xbf22eadb, 0xbf87c3b6), (0xbf87c3b6, 0xbe593924),
+            (0xbe593924, 0xbf22eadb), (0xbf22eadb, 0xbf22eadb), (0xbe593924, 0xbf87c3b6), (0xbf87c3b6, 0xbf22eadb),
+        ],
+    ];
+    for (b, want) in (1..=5u8).zip(vara) {
+        let got: Vec<(u32, u32)> = constellation(b).unwrap().iter().map(|p| ((p.re as f32).to_bits(), (p.im as f32).to_bits())).collect();
+        assert_eq!(got, want, "{b} bits");
+    }
+}

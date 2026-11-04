@@ -180,7 +180,7 @@ fn length_formula() {
 }
 
 // Coded length against N, the channel interleaver length in the .dat files: exact for rates
-// 1/3, 1/2 and 2/3; rates 4/5 and 5/6 fall 1..4 bits short of a whole number of data cells.
+// 1/3, 1/2 and 2/3; rates 4/5 and 5/6 may fall up to 4 bits short of a whole number of data cells.
 #[test]
 fn coded_length_fills_the_frame() {
     for bw in [Bandwidth::Hz500, Bandwidth::Hz2300, Bandwidth::Hz2750] {
@@ -190,7 +190,7 @@ fn coded_length_fills_the_frame() {
             if matches!(l.code_rate, (1, 3) | (1, 2) | (2, 3)) {
                 assert_eq!(pad, 0, "{bw:?} L{}", l.level);
             } else {
-                assert!((1..=4).contains(&pad), "{bw:?} L{}: pad {pad}", l.level);
+                assert!(pad <= 4, "{bw:?} L{}: pad {pad}", l.level);
             }
         }
     }

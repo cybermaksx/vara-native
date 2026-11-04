@@ -153,15 +153,15 @@ Per-bandwidth block boundaries:
 - **Leading structure shared by all three files** (`real_files_start_with_two_permutations`):
   1. Words `0..300` form a permutation of `0..299` (each value once).
   2. Words `300..396` form a permutation of `0..95` (each value once).
-  These leading permutations are identical across all three bandwidth files
-  and are presumed bandwidth-independent interleavers; confirming their
-  radio role is deferred to recordings.
+  These are the two interleavers of **level 1** (section 2.7). They are
+  identical across the three files because level 1 has the same frame
+  payload in every bandwidth (K = 96, N = 300).
   Trailing the permutations, all three blocks additionally end the covered
   region with two zero bytes (`0x0000` word) directly before the CRC.
 - **Beyond the permutations** the three files diverge and carry per-bandwidth
-  data. Part of it is now identified: one **pilot mask** per PSK/QAM speed
-  level, in level order (section 3.4). The words between the masks are not
-  yet interpreted; the loader keeps treating the whole block as opaque words.
+  data. The whole block is now accounted for: it is a sequence of 17
+  **records**, one per speed level followed by service frames (section 2.7).
+  `parse` still returns it as plain words; `ModemTables::records()` walks it.
 - The final data byte (position `n−1`) is inside `words` but outside the
   checksum scope (section 1.5).
 
@@ -193,7 +193,8 @@ suite exercises.
 - Not covered by any checksum, no permutation structure known.
 - Copied out by the original loader as one separate array; preserved here as
   `ModemTables::extra` rather than merged into `words`.
-- Purpose currently unknown (open question 2).
+- It belongs to the original software's licensing, not to the modem, and is
+  deliberately left undecoded (open question 2).
 
 ### 2.6 API summary
 
@@ -212,6 +213,36 @@ assert_eq!(tables.words.len(), 0xAFF4A / 2);
    `BadCrc`;
 3. on success: the table block as `words: Vec<u16>` (big-endian decoded) and
    any beyond-CRC bytes raw as `extra: Vec<u8>`.
+
+### 2.7 Records (`ModemTables::records`, `tests/dat_records.rs`)
+
+The table block is a sequence of **17 records**: one per speed level, level 1
+first, then service frames (`record_shapes`). Each record is, in order:
+
+| Part | Length (words) | Content |
+|---|---|---|
+| Channel interleaver | N | permutation of `0..N` (coded bits) |
+| Information interleaver | K | permutation of `0..K` (information bits) |
+| PSK/QAM: pilot positions | carriers × pilots per carrier | symbol numbers of the pilots, per carrier |
+| PSK/QAM: pilot mask | carriers × frame symbols | 0/1, carrier by carrier |
+| FSK: tone map | frame symbols | base FFT bin of every symbol |
+| FSK: pilot list | 24 | symbol numbers of the pilot symbols |
+| FSK: pairs | 2 × frame symbols | (pilot flag, pilot value) per symbol |
+
+K and N per level are in section 3.7. After the levels come the service
+frames: an 11-carrier × 50-symbol PSK frame (500 Hz twice, 2300 Hz once),
+plus in the 500 Hz file a 2 × 450 PSK frame and a 92-symbol FSK frame.
+
+**Observations**, all checked by tests:
+
+- the record layout accounts for every word of all three blocks, with nothing
+  left over (`layout_fills_table_block_exactly`, `real_files_walk_cleanly`);
+- every interleaver is a permutation of the stated length, and every mask is
+  0/1 — anything else is rejected (`rejects_non_permutation`,
+  `rejects_non_binary_mask`);
+- the pilot positions of a carrier are exactly the 1s of its mask, counted
+  from symbol 2: mask entry `k` is symbol `k + 2`
+  (`real_pilot_positions_are_the_mask_ones`).
 
 ---
 
@@ -245,9 +276,9 @@ the author's rounded figures (`nominal_baud`, `net_bps`).
 
 | Level | Modulation | Carriers | Baud | Net bps | Frame symbols | Pilots / carrier |
 |---|---|---|---|---|---|---|
-| 1 | FSK | 11 | 23 | 18 | — | — |
-| 2 | FSK | 11 | 47 | 41 | — | — |
-| 3 | FSK | 11 | 47 | 61 | — | — |
+| 1 | FSK | 11 | 23 | 18 | 124 | — |
+| 2 | FSK | 11 | 47 | 41 | 228 | — |
+| 3 | FSK | 11 | 47 | 61 | 226 | — |
 | 4 | BPSK | 2 | 94 | 88 | 393 | 18 |
 | 5 | QPSK | 2 | 94 | 177 | 394 | 18 |
 | 6 | QPSK | 3 | 94 | 270 | 375 | 12 |
@@ -260,9 +291,9 @@ the author's rounded figures (`nominal_baud`, `net_bps`).
 
 | Level | Modulation | Carriers | Baud | Net bps | Frame symbols | Pilots / carrier |
 |---|---|---|---|---|---|---|
-| 1 | FSK | 32 | 23 | 18 | — | — |
-| 2–3 | FSK | 16 | 47 | 41 / 82 | — | — |
-| 4 | FSK | 16 | 94 | 175 | — | — |
+| 1 | FSK | 32 | 23 | 18 | 124 | — |
+| 2–3 | FSK | 16 | 47 | 41 / 82 | 228 | — |
+| 4 | FSK | 16 | 94 | 175 | 395 | — |
 | 5 | QPSK | 3 | 94 | 270 | 375 | 12 |
 | 6 | QPSK | 4 | 94 | 363 | 364 | 9 |
 | 7 | QPSK | 6 | 94 | 549 | 354 | 6 |
@@ -277,9 +308,9 @@ the author's rounded figures (`nominal_baud`, `net_bps`).
 
 | Level | Modulation | Carriers | Baud | Net bps | Frame symbols | Pilots / carrier |
 |---|---|---|---|---|---|---|
-| 1 | FSK | 40 | 23 | 18 | — | — |
-| 2–3 | FSK | 20 | 47 | 41 / 82 | — | — |
-| 4 | FSK | 20 | 94 | 175 | — | — |
+| 1 | FSK | 40 | 23 | 18 | 124 | — |
+| 2–3 | FSK | 20 | 47 | 41 / 82 | 228 | — |
+| 4 | FSK | 20 | 94 | 175 | 395 | — |
 | 5–9 | QPSK | 3 / 4 / 6 / 8 / 10 | 94 | as 2300 L5–9 | as 2300 L5–9 | as 2300 L5–9 |
 | 10 | QPSK | 13 | 94 | 1203 | 348 | 3 |
 | 11–13 | QPSK | 59 | 42 | 2423 / 3230 / 3877 | 149 | 1 |
@@ -314,7 +345,8 @@ Every PSK/QAM level transmits frames laid out as a grid of
 
 - `SpeedLevel::frame_cells()` = `frame_symbols × carriers`
 - `SpeedLevel::pilots()` = `pilots_per_carrier × carriers`
-- Both are `None` on FSK levels (`fsk_levels_carry_no_frame_map`).
+- Both are `None` on FSK levels, which have a frame length but no pilot mask
+  (`fsk_levels_carry_no_pilot_mask`; FSK frame lengths in `fsk_frame_lengths`).
 
 The original mode table stores the frame length **plus one**
 (e.g. 150 for a 149-symbol frame); `frame_symbols` holds the real length.
@@ -388,14 +420,308 @@ meaning:
 
 - a per-level SNR figure rising from about −13.6 dB (level 1) to +18 dB
   (top level) — very likely the threshold for choosing a level;
-- FSK tone placement (first/last FFT bin) and samples-per-symbol figures that
-  point to a 3000 Hz complex baseband; this is a hypothesis until checked
-  against audio;
 - several per-level scaling constants of unknown role.
+
+FSK tone placement and the exact symbol rates were in this list; they are now
+in `SpeedLevel` (sections 3.7 and 3.8).
+
+### 3.7 Frame payload and exact rates (`tests/modes.rs`)
+
+Every level carries a frame of **K information bits** coded into **N coded
+bits** (`info_bits`, `coded_bits`): K and N are the lengths of the level's two
+interleavers (section 2.7). The symbol length is a whole number of samples of
+a 3000 Hz baseband (`samples_per_symbol`):
+
+| Nominal baud | Samples at 3000 Hz | Exact rate |
+|---|---|---|
+| 23 | 128 | 23.4375 |
+| 47 | 64 | 46.875 |
+| 94 | 32 | 93.75 |
+| 42 | 72 (64 + 8 prefix) | 41.667 |
+
+**Observation.** `K × symbol_rate / frame_symbols` reproduces every one of the
+46 published net rates to within 2 bit/s, the rounding of the published figure
+(`info_bits_reproduce_published_net_rates`): the published rate counts K bits
+per frame of `frame_symbols` symbols. Whatever else goes on air around a frame
+(lead-in, gaps) is outside that figure.
+
+The code rate (`code_rate`) of each level is 1/3, 1/2, 2/3, 4/5 or 5/6, and N
+follows the turbo rule of section 4.3 (`coded_length_follows_turbo_rule`):
+
+```text
+N = K / R + 12 + padding,   padding 0..=4,   K the largest value keeping K / R whole
+```
+
+For PSK/QAM levels the coded bits fill the data cells exactly:
+`data_cells = N / bits per symbol` (`data_cells`). That is every cell minus the
+pilots minus one reference cell per carrier; 16QAM/32QAM frames reserve 19 more
+cells per carrier (section 4.5).
+
+OFDM subcarriers sit on contiguous FFT bins centred on bin 32 (= 1500 Hz):
+2300 Hz uses bins 8..56, 2750 Hz bins 3..61, 500 Hz bins 27..37 (`ofdm_bins`).
+
+### 3.8 FSK parameters (`FskParams`, `tests/fsk.rs`)
+
+FSK levels hop a single tone over FFT bins `first_bin..=last_bin` of a
+`samples_per_symbol`-point FFT at 3000 Hz, moving `spacing` bins per symbol
+value, with `bits` coded bits per data symbol:
+
+| Bandwidth | Level | Bits | Bins | Spacing | Tone positions |
+|---|---|---|---|---|---|
+| 500 | 1 | 3 | 54..74 | 2 | 11 |
+| 500 | 2, 3 | 3 | 27..37 | 1 | 11 |
+| 2300 | 1 | 3 | 33..96 | 2 | 32 |
+| 2300 | 2 / 3 | 3 / 4 | 17..48 | 2 | 16 |
+| 2300 | 4 | 4 | 9..24 | 1 | 16 |
+| 2750 | 1 | 3 | 24..103 | 2 | 40 |
+| 2750 | 2 / 3 | 3 / 4 | 12..51 | 2 | 20 |
+| 2750 | 4 | 4 | 6..25 | 1 | 20 |
+
+**Observation.** The published "carriers" of an FSK level are its tone
+positions, `ceil((last − first + 1) / spacing)`, on all 11 FSK levels
+(`tone_positions_match_the_published_carriers`). An FSK frame has 24 pilot
+symbols; the others carry `bits` coded bits each and fill N exactly
+(`data_symbols_fill_the_coded_bits`).
 
 ---
 
-## 4. Running the test suite
+## 4. Transmit waveform (`src/fft.rs`, `src/ofdm.rs`, `src/turbo.rs`, `src/mapping.rs`, `src/frame.rs`, `src/fsk.rs`)
+
+The sender side, layer by layer from math to audio. Everything here is
+self-contained (no crates), tested as units, and consistent end-to-end: the
+turbo encoder's output feeds the frame assembler, the frame assembler feeds
+the OFDM modulator, the modulator produces 48 kHz audio. FSK levels take a
+separate path from the encoder to a tone sequence (section 4.6).
+
+### 4.1 Complex arithmetic and FFT (`src/fft.rs`)
+
+A minimal `Complex` (f64) and an in-place radix-2 FFT sized for powers of
+two. No external crates — the whole waveform layer keeps the zero-dependency
+rule. `tests/fft.rs` checks it against a direct DFT for lengths 1..1024
+(`matches_naive_dft`), the inverse (`inverse_restores_input`) and Parseval's
+identity (`parseval`).
+
+### 4.2 OFDM at the sound-card rate (`src/ofdm.rs`)
+
+The structural constants of a symbol:
+
+| Quantity | Baseband (3000 Hz) | Audio (48 000 Hz, ×16) |
+|---|---|---|
+| FFT length | 64 | 1024 |
+| Cyclic prefix | 8 | 128 |
+| Symbol length | 72 | 1152 |
+| Symbol duration | 24 ms | 24 ms |
+
+Subcarrier `k` sits at `k × 46.875 Hz` (`bin_frequency_hz` in
+`src/modes.rs`): the bin spacing is the same at both rates, 3000/64 =
+48000/1024. The OFDM symbol is 72 baseband samples, 41.667 baud; the other
+levels use 128, 64 and 32 samples per symbol (section 3.7).
+
+**Modulation.** One frame is `frame_symbols` OFDM symbols. Per symbol, the
+cells (complex, `[symbol][carrier]`) are placed on the subcarrier bins as a
+**Hermitian pair** (`c` at bin `k`, `conj(c)` at bin `N−k`, both scaled
+`N/2`), the inverse FFT produces the time signal, and the real part is taken:
+a unit cell becomes a unit cosine. A **cyclic prefix** is emitted by copying
+the last 128 real samples of the symbol in front of it, so the complete
+symbol is CP + FFT-body — `cyclic_prefix_repeats_the_symbol_tail` and
+`demodulation_inverts_modulation` pin both halves, and
+`energy_stays_on_the_level_bins` checks nothing leaks off the bandwidth's
+bins.
+
+**Demodulation.** Symbol-aligned audio is cut into `SYMBOL_LEN` chunks, the
+prefix is skipped, the FFT is taken, and bins are read back scaled `2/N`.
+
+**Frame pilot map** (`FrameMap::from_record`). The record's pilot mask is
+stored carrier-by-carrier; converted to `[symbol][carrier]`, **mask entry
+`k` describes OFDM symbol `k + 2`** (`MASK_FIRST_SYMBOL = 2`): symbol 0 is
+the reference symbol and symbol 1 is never a pilot. The resulting pilot
+symbols equal the record's pilot positions on every PSK/QAM level
+(`real_frame_maps_match_pilot_positions_and_data_cells`). The mask's shape must
+match the level's grid, and its last two entries, which would point past the
+end of the frame, must be clear. The map then defines:
+
+- `pilot_count()` — pilot cells in the frame;
+- `data_cells()` = `(symbols − 1) × carriers − pilot_count()` — symbol 0 is
+  the reference symbol and carries no data bits.
+
+### 4.3 Turbo FEC (`src/turbo.rs`)
+
+The error-correction code is a **turbo code using the 3GPP constituent
+encoder** — the open point of the former open question 5, now settled:
+
+- **Constituent RSC encoder**: feedback `1 + D² + D³`, output parity
+  `1 + D + D³`, constraint length 4 (`8` states) — `rsc_step` is the state
+  machine, tested directly.
+- **Two encoders**: the second reads the information bits **through the
+  level's interleaver**, which must be a permutation of the same length
+  (`NotAPermutation` otherwise).
+- **Puncturing** with period `Pd` per rate: `(1,3) → 1`, `(1,2) → 2`,
+  `(2,3) → 4`, `(3,4) → 6`, `(4,5) → 8`, `(5,6) → 10`. At step `t = i mod Pd`
+  the first encoder's parity is sent when `t == 0` and the second's when
+  `t == Pd/2`; the systematic bit is always sent
+  (`parities_sent`, `coded_len`).
+- **Termination**: after the payload, the trellis is driven back to state 0
+  with `termination_input` (the bit that makes the feedback vanish) over
+  three steps — 12 tail bits total (`TAIL_BITS`), sent **unpunctured** as
+  `sys1, p1, sys2, p2` per step.
+
+**Padding.** The encoder's output (`coded_len`) is at most 4 bits shorter than
+the level's N. It equals N exactly at rates 1/3, 1/2 and 2/3; at 4/5 and 5/6
+it is 0..4 bits short, N being rounded up to a whole number of data cells
+(`coded_length_fills_the_frame`). The missing bits are taken as 0
+(section 4.5): the original reads bits past N as 0, but what the 0..4
+padding bits hold is not shown directly; zero is the working assumption.
+
+### 4.4 Constellations (`src/mapping.rs`)
+
+The bit→complex maps, values taken **exactly as the protocol stores them**
+(f32 originals; `table_values_are_bit_exact` in `tests/mapping.rs` compares
+every point's raw bits):
+
+- **BPSK** — points on the real axis;
+- **QPSK** — points on the axes (not the 45° diagonals);
+- **8PSK** — Gray-labelled;
+- **16QAM** — Gray square, Gray-coded on each axis;
+- **32QAM** — a cross: odd levels ±1, ±3, ±5 per axis without the four
+  corners (`qam32_is_a_cross`; its labelling is not claimed to be Gray).
+
+For BPSK, QPSK and 8PSK the table also agrees point by point with the
+original's receive-side decisions, a separate part of it
+(`psk_table_agrees_with_vara_demapper`).
+
+The first bit of a group is the most significant bit of the index
+(`index_msb_first`).
+
+### 4.5 Frame assembly — differential PSK (`src/frame.rs`)
+
+How cells get their values (`assemble`). Order of events:
+
+1. **Channel interleave**: `interleaved[i] = coded[A[i]]`, with the coded
+   stream padded with zeros when shorter than the interleaver
+   (`channel_interleave`).
+2. Per carrier, walk the symbols:
+   - symbol `0` — the **reference symbol**, a constellation point the
+     original draws at random for every carrier; the interface takes it
+     explicitly, so tests and callers can pin it;
+   - a **pilot cell** — repeats the previous symbol on that carrier;
+   - a **data cell** — the previous symbol **multiplied** by the
+     constellation point selected by the next bits: differential PSK (DPSK).
+     Two consecutive symbols therefore only ever differ by the encoded
+     rotation — the receiver decodes phase *changes*, not absolute phase.
+3. The bit stream is consumed strictly: exactly `data_cells() × bits/symbol`
+   bits on PSK levels (`FrameError::BitCount` otherwise), each chunk mapped
+   MSB-first.
+
+**QAM levels are not differential.** 16QAM/32QAM are sent coherently, with
+19 extra reference cells per carrier described outside the record's pilot mask
+(`real_frame_maps_match_pilot_positions_and_data_cells` checks the count).
+Where those cells sit and what they hold is not yet known, so `assemble`
+rejects QAM levels with `FrameError::CoherentQam` rather than guess
+(open question 7).
+
+### 4.6 FSK tone sequence (`src/fsk.rs`, `tests/fsk.rs`)
+
+FSK levels are **frequency-hopped MFSK**: one tone per symbol, no reference
+symbol. For frame symbol `t` (`tone_bins`):
+
+- a **data symbol** takes the next `bits` coded bits (first bit most
+  significant) as `v` and sends `d = gray_decode(v)`, the inverse Gray code —
+  neighbouring tones carry labels one bit apart (`symbol_values_are_inverse_gray`);
+- a **pilot symbol** (flagged in the record's pairs) sends the record's `d`;
+- the tone is
+
+  ```text
+  bin = first + ((map[t] + spacing × d − first) mod (last − first + 1))
+  ```
+
+  `map[t]` being the record's base bin for that symbol. The base hops across
+  the whole band from symbol to symbol; the data shifts the tone from there,
+  wrapping round inside the band (`tone_formula_with_wraparound`).
+
+Bin `k` sounds at `k × 3000 / samples_per_symbol` Hz. With VARA's tables every
+tone falls inside the band (`real_tables_give_tones_inside_the_band`), and the
+24 flagged symbols are exactly the record's pilot list
+(`real_pilots_are_flagged_where_listed`).
+
+### 4.7 Not yet built on the sender side
+
+- FSK audio: how the phase carries from one symbol to the next, and the
+  lead-in of random symbols the original sends before the data;
+- coherent QAM grid assembly;
+- single-carrier PSK audio (levels at 94 baud): the pulse shape;
+- the payload itself: what goes into the information bits (frame headers,
+  the radio-frame CRC, the format of service frames) — the layer above FEC;
+- resampling to other sound-card rates and real audio/PTT I/O.
+
+---
+
+## 5. Command channel (`src/control.rs`, `src/session.rs`, `src/server.rs`)
+
+The modem is driven over TCP port 8300 by an application (PAT, Winlink
+Express). Everything in this section was observed between Winlink Express and
+the original modem; callsigns in the tests are placeholders.
+
+### 5.1 Lines (`tests/control.rs`)
+
+- ASCII lines ending in **CR only** (`\r`); LF is not a terminator
+  (`line_reader_does_not_treat_lf_as_terminator`).
+- Application → modem (`Command`): `WINLINK SESSION`, `CONNECT <own> <target>`,
+  `ABORT`, `BW500` / `BW2300` / `BW2750`. Anything else is kept verbatim as
+  `Command::Unknown`.
+- Modem → application (`Event`): `OK`, `PTT ON`, `PTT OFF`, `BUSY ON`,
+  `BUSY OFF`, `DISCONNECTED`, `IAMALIVE`.
+- The modem sends some events **together in one TCP segment**: `OK`,
+  `PTT ON`, `BUSY ON` in answer to `CONNECT`; `DISCONNECTED`, `BUSY OFF` at
+  the end of a call (`grouped_events_encode_to_observed_segments`).
+- A line longer than `MAX_LINE` (1024 bytes) without a terminator is an error
+  (`LineTooLong`), and the server closes that connection.
+
+### 5.2 Call without answer (`tests/session.rs`)
+
+`Session` holds the behaviour on a caller-supplied clock, with no I/O: the
+caller passes commands and fires timers, and every returned batch is one
+segment. Observed behaviour it reproduces:
+
+| Behaviour | Value |
+|---|---|
+| Call attempts before giving up | 15 |
+| First call frame (PTT on → off) | 1.786 s |
+| Later call frames | 1.431 s |
+| First PTT on → second PTT on | 3.110 s |
+| Listening between later frames | 1.295 s |
+| Last PTT off → `DISCONNECTED` | 1.320 s |
+| `IAMALIVE` while idle | every 60 s |
+
+These five durations reproduce every event of a captured 15-attempt call to
+within 38 ms (`unanswered_call_matches_capture`). `ABORT` is answered `OK` at
+once, but the frame on air plays to its end before `PTT OFF`
+(`abort_during_transmission_matches_capture`).
+
+Timings that could never progress are refused when a session is created:
+a zero keepalive interval (`ZeroKeepalive`) and zero attempts
+(`ZeroAttempts`).
+
+**Assumptions** (not in the captures, marked as such in the tests): `ABORT`
+between two frames hangs up as after the last frame; no `IAMALIVE` during a
+call; no reply to unknown commands.
+
+### 5.3 Server and binary (`tests/server.rs`, `tests/cli.rs`)
+
+`serve_client` runs one connection on one thread: the socket read timeout is
+the time to the session's next deadline, and timers fire at their scheduled
+times rather than at wake-up, so the schedule does not drift. Each batch of
+events is one write. The tests run it over loopback with the clock 100 times
+faster.
+
+```sh
+vara-native --bind 127.0.0.1:8300   # the default
+```
+
+The data port (8301) is not served yet: its format has not been observed.
+
+---
+
+## 6. Running the test suite
 
 ```sh
 cargo test                # self-contained: synthetic files only
@@ -408,20 +734,36 @@ data — parsers, not tables.
 
 ---
 
-## 5. Open questions
+## 7. Open questions
 
 1. Do radio frames use this same CRC, and if so with the same off-by-one
    scope? Decide from recordings with known payloads. `src/dat.rs` stays
    free of that assumption so the frame layer can decide on evidence.
-2. What is the extra block of `VARAHF500.dat` for? It is intact, not covered
-   by any checksum, and unaccounted for; next step is recording evidence.
-3. Are the leading permutations really common-frame interleavers, and what
-   is the role of the two zero words that precede the CRC in every block?
+2. ~~What is the extra block of `VARAHF500.dat` for?~~ **Settled:** it is part
+   of the original's licensing, not of the modem, and is deliberately left
+   undecoded.
+3. ~~Are the leading permutations common-frame interleavers?~~ **Settled:**
+   they are the two interleavers of level 1 (section 2.7). Still open: the
+   role of the two zero words that precede the CRC in every block.
 4. What are the two service frame grids (11 × 50 and 2 × 450) used for, and
    which audio frequencies do their carriers occupy?
-5. What lies between the pilot masks in the table files? The strongest lead
-   is forward error correction structure: its index ranges track the number
-   of coded bits per frame of each level. Not asserted anywhere yet.
-6. Exact symbol rates and OFDM subcarrier frequencies: the published baud
-   figures are rounded; the 3000 Hz baseband hypothesis (section 3.6) would
-   make them 23.4375 / 46.875 / 93.75 / 41.67 baud. Decide from recordings.
+5. ~~What lies between the pilot masks in the table files?~~ **Settled:**
+   the two interleavers of each level, plus pilot positions (PSK) or the tone
+   map and pilot pairs (FSK). Every word of the three blocks belongs to a
+   record (section 2.7).
+6. Exact symbol rates: the published baud figures are rounded; the
+   3000 Hz baseband with 128/64/32 samples-per-symbol agrees with
+   23.4375 / 46.875 / 93.75 / 41.67 baud. Structurally confirmed by the
+   waveform layer; final confirmation against real audio (and true
+   subcarrier exactness under frequency error) is pending.
+7. Where are the 19 extra reference cells per carrier of the 16QAM/32QAM
+   frames, and what do they hold? Until then `assemble` refuses QAM levels
+   (`FrameError::CoherentQam`).
+8. ~~Where does the reference symbol come from?~~ **Settled:** the original
+   draws a random constellation point per carrier and frame; the receiver,
+   decoding phase changes, does not need to know it.
+9. FSK audio: phase continuity between symbols, and the lead-in of random
+   symbols sent before the data (its length depends on the level).
+10. What do the 0..4 padding bits at rates 4/5 and 5/6 hold? Zero is assumed.
+11. The layer above the FEC: frame headers, the radio-frame CRC (question 1),
+    callsign encoding, and the call/acknowledge frames of a session.

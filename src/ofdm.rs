@@ -97,8 +97,12 @@ pub struct FrameMap {
     pilot: Vec<Vec<bool>>,
 }
 
+/// First symbol a mask entry describes: VARA's loader stores mask entry k at symbol k + 2.
+const MASK_FIRST_SYMBOL: usize = 2;
+
 impl FrameMap {
-    /// The record's mask is stored carrier by carrier; it must match the level's grid.
+    /// The record's mask is stored carrier by carrier; it must match the level's grid, and its
+    /// last two entries, which would fall past the end of the frame, must be clear.
     pub fn from_record(level: &SpeedLevel, record: &Record) -> Result<FrameMap, OfdmError> {
         let carriers = level.carriers as usize;
         let symbols = level.frame_symbols.unwrap_or(0) as usize;
@@ -107,7 +111,13 @@ impl FrameMap {
         if mask.len() != carriers || mask.iter().any(|m| m.len() != symbols) {
             return Err(shape);
         }
-        let pilot = (0..symbols).map(|s| mask.iter().map(|m| m[s]).collect()).collect();
+        let mut pilot = vec![vec![false; carriers]; symbols];
+        for (c, m) in mask.iter().enumerate() {
+            for (k, _) in m.iter().enumerate().filter(|(_, on)| **on) {
+                let symbol = k + MASK_FIRST_SYMBOL;
+                *pilot.get_mut(symbol).ok_or(OfdmError::PilotBeyondFrame { carrier: c, symbol })?.get_mut(c).unwrap() = true;
+            }
+        }
         Ok(FrameMap { pilot })
     }
 
@@ -116,12 +126,13 @@ impl FrameMap {
     }
 
     pub fn symbols(&self) -> usize {
-        todo!()
+        self.pilot.len()
     }
 
     /// Cells left for data: all cells minus the reference symbol and the pilots.
     pub fn data_cells(&self) -> usize {
-        todo!()
+        let carriers = self.pilot.first().map_or(0, Vec::len);
+        self.symbols().saturating_sub(1) * carriers - self.pilot_count()
     }
 
     pub fn pilot_count(&self) -> usize {

@@ -70,7 +70,7 @@ The protocol is naturally layered, and the codebase mirrors that exactly:
 | **Control plane** | TCP `8300` session command language (`WINLINK SESSION`, `CONNECT`, `ABORT`, `BW…`, …) | call, abort and keepalive done; other commands open |
 | **Transport plane** | TCP `8301` data / KISS framing | not started (format not yet observed) |
 | **Session** | Callsign hashing, bandwidth negotiation, retry cycles, connect/ACK/NACK state machine | retry cycle of an unanswered call done; the rest open |
-| **PHY** | Speed levels, FEC, interleaving, pilots, modulation (FSK, BPSK/QPSK/8PSK, 16/32QAM), OFDM | transmit structure done except QAM cells; sync, preamble and headers open |
+| **PHY** | Speed levels, scrambling, FEC, interleaving, pilots, modulation (FSK, BPSK/QPSK/8PSK, 16/32QAM), OFDM | frame structure done for all but QAM; scrambling, symbol shape, sync, preamble and headers open |
 | **Audio** | ALSA capture/playback, PTT (CAT / VOX / GPIO) | not started |
 
 Each layer is testable in isolation. The command and KISS planes can be
@@ -162,7 +162,7 @@ Done:
 
 Next:
 
-1. **Coherent QAM frames** and **FSK/single-carrier audio**.
+1. **Scrambling**, **coherent QAM frames** and **FSK/single-carrier audio**.
 2. **Receiver** — turbo decoder, demodulators, then synchronisation.
 3. **Preamble, frame headers, session protocol** — these need recordings of
    the original on the air; they are what makes real interoperability.

@@ -542,7 +542,16 @@ end of the frame, must be clear. The map then defines:
 
 - `pilot_count()` — pilot cells in the frame;
 - `data_cells()` = `(symbols − 1) × carriers − pilot_count()` — symbol 0 is
-  the reference symbol and carries no data bits.
+  the reference symbol and carries no data bits. This holds for BPSK, QPSK and
+  8PSK levels only: 16QAM/32QAM frames have 19 more reference cells per
+  carrier that the mask does not describe (section 4.5), so for them
+  `data_cells()` is too large by `19 × carriers`.
+
+**Symbol shape.** The symbol is rectangular: cyclic prefix plus FFT body, no
+windowing, a unit cell giving a unit cosine. Frequencies and durations match
+the tables; window, amplitude scale and the exact prefix placement are not yet
+confirmed against the original's audio, and the round-trip tests cannot
+confirm them.
 
 ### 4.3 Turbo FEC (`src/turbo.rs`)
 
@@ -569,8 +578,16 @@ encoder** — the open point of the former open question 5, now settled:
 the level's N. It equals N exactly at rates 1/3, 1/2 and 2/3; at 4/5 and 5/6
 it is 0..4 bits short, N being rounded up to a whole number of data cells
 (`coded_length_fills_the_frame`). The missing bits are taken as 0
-(section 4.5): the original reads bits past N as 0, but what the 0..4
-padding bits hold is not shown directly; zero is the working assumption.
+(section 4.5): the coded bits are written into a zero-filled buffer of length
+N, so the 0..4 padding bits are zeros.
+
+**Scrambling (not yet implemented).** Before the turbo encoder the information
+bits are XORed bit by bit with a fixed pseudo-random 0/1 sequence (150 000
+long, the same for every frame and every start of the modem); the receiver
+removes it after decoding. The generator is identified but must be reproduced
+bit-exactly before it goes into `src/` (open question 10). Until then the
+encoder here works on unscrambled bits, so its output does **not** yet match
+the original on air.
 
 ### 4.4 Constellations (`src/mapping.rs`)
 
@@ -645,6 +662,7 @@ tone falls inside the band (`real_tables_give_tones_inside_the_band`), and the
 
 ### 4.7 Not yet built on the sender side
 
+- scrambling of the information bits (section 4.3);
 - FSK audio: how the phase carries from one symbol to the next, and the
   lead-in of random symbols the original sends before the data;
 - coherent QAM grid assembly;
@@ -764,6 +782,10 @@ data — parsers, not tables.
    decoding phase changes, does not need to know it.
 9. FSK audio: phase continuity between symbols, and the lead-in of random
    symbols sent before the data (its length depends on the level).
-10. What do the 0..4 padding bits at rates 4/5 and 5/6 hold? Zero is assumed.
+10. ~~What do the 0..4 padding bits hold?~~ **Settled:** zeros. New open
+    point: the scrambling sequence of section 4.3 must be reproduced
+    bit-exactly; a dump from the running original or a recording with known
+    data would confirm it.
 11. The layer above the FEC: frame headers, the radio-frame CRC (question 1),
     callsign encoding, and the call/acknowledge frames of a session.
+12. Window, amplitude and prefix placement of the OFDM symbol (section 4.2).

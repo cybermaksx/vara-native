@@ -6,3 +6,4 @@ pub mod modes;
 pub mod ofdm;
 pub mod server;
 pub mod session;
+pub mod turbo;

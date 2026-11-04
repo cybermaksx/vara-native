@@ -152,15 +152,25 @@ fn mask_record(carriers: usize, symbols: usize, pilots: &[(usize, usize)]) -> Re
     }
 }
 
-// The .dat mask is stored carrier by carrier; the frame map is indexed [symbol][carrier].
+// The .dat mask is stored carrier by carrier from symbol 2 on (VARA's loader writes entry k at
+// symbol k + 2, its transmitter reads by symbol number); the frame map is indexed [symbol][carrier].
 #[test]
-fn frame_map_transposes_the_mask() {
+fn frame_map_places_mask_entry_k_at_symbol_k_plus_2() {
     let l = level(Bandwidth::Hz500, 7);
-    let r = mask_record(11, 149, &[(0, 0), (3, 148), (10, 7)]);
+    let r = mask_record(11, 149, &[(0, 0), (3, 146), (10, 7)]);
     let m = FrameMap::from_record(l, &r).unwrap();
     assert_eq!(m.pilot_count(), 3);
-    assert!(m.is_pilot(0, 0) && m.is_pilot(148, 3) && m.is_pilot(7, 10));
-    assert!(!m.is_pilot(1, 0) && !m.is_pilot(148, 2));
+    assert!(m.is_pilot(2, 0) && m.is_pilot(148, 3) && m.is_pilot(9, 10));
+    assert!(!m.is_pilot(0, 0) && !m.is_pilot(146, 3) && !m.is_pilot(7, 10));
+}
+
+// Symbol 0 is the reference symbol and never a pilot; the last two mask entries fall outside the frame.
+#[test]
+fn frame_map_rejects_mask_entries_beyond_the_frame() {
+    let l = level(Bandwidth::Hz500, 7);
+    for k in [147, 148] {
+        assert_eq!(FrameMap::from_record(l, &mask_record(11, 149, &[(4, k)])).unwrap_err(), OfdmError::PilotBeyondFrame { carrier: 4, symbol: k + 2 });
+    }
 }
 
 #[test]
@@ -180,6 +190,29 @@ fn real_frame_maps_hold_the_level_pilots() {
             let m = FrameMap::from_record(l, r).unwrap();
             assert_eq!(Some(m.pilot_count()), l.pilots(), "{bw:?} L{}", l.level);
             assert_ne!(l.modulation, Modulation::Fsk);
+        }
+    }
+}
+
+// Every PSK/QAM level, not only OFDM: pilot symbols are the record's pilot positions, and
+// cells minus the reference symbol minus pilots are the level's data cells (QAM: see below).
+#[test]
+fn real_frame_maps_match_pilot_positions_and_data_cells() {
+    for bw in ALL {
+        let Some(dir) = std::env::var_os("VARA_DIR").map(PathBuf::from) else { return };
+        let records = parse(bw, &std::fs::read(dir.join(bw.file_name())).unwrap()).unwrap().records().unwrap();
+        for (l, r) in levels(bw).iter().zip(&records).filter(|(l, _)| l.modulation != Modulation::Fsk) {
+            let m = FrameMap::from_record(l, r).unwrap();
+            let RecordBody::Psk { pilot_symbols, .. } = &r.body else { panic!() };
+            for (c, positions) in pilot_symbols.iter().enumerate() {
+                let mut want = positions.clone();
+                want.sort_unstable();
+                let got: Vec<u16> = (0..m.symbols()).filter(|&s| m.is_pilot(s, c)).map(|s| s as u16).collect();
+                assert_eq!(got, want, "{bw:?} L{} carrier {c}", l.level);
+            }
+            // 16QAM/32QAM frames hold 19 more reference cells per carrier, outside this mask.
+            let extra = if matches!(l.modulation, Modulation::Qam16 | Modulation::Qam32) { 19 * l.carriers as usize } else { 0 };
+            assert_eq!(Some(m.data_cells() - extra), l.data_cells(), "{bw:?} L{}", l.level);
         }
     }
 }

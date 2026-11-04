@@ -22,6 +22,7 @@ pub enum OfdmError {
     /// Expected shape of the grid or mask.
     GridShape { symbols: usize, carriers: usize },
     SampleCount { expected: usize, got: usize },
+    PilotBeyondFrame { carrier: usize, symbol: usize },
 }
 
 #[derive(Debug, Clone)]
@@ -112,6 +113,15 @@ impl FrameMap {
 
     pub fn is_pilot(&self, symbol: usize, carrier: usize) -> bool {
         self.pilot[symbol][carrier]
+    }
+
+    pub fn symbols(&self) -> usize {
+        todo!()
+    }
+
+    /// Cells left for data: all cells minus the reference symbol and the pilots.
+    pub fn data_cells(&self) -> usize {
+        todo!()
     }
 
     pub fn pilot_count(&self) -> usize {

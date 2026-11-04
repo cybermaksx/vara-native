@@ -3,6 +3,7 @@ pub mod crc;
 pub mod dat;
 pub mod fft;
 pub mod frame;
+pub mod fsk;
 pub mod mapping;
 pub mod modes;
 pub mod ofdm;

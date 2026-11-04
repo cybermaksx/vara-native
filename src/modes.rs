@@ -27,6 +27,15 @@ pub enum Modulation {
     Qam32,
 }
 
+/// FSK levels only: tones hop over FFT bins first..=last at `spacing` bins per symbol value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FskParams {
+    pub bits: u8,
+    pub first_bin: u8,
+    pub last_bin: u8,
+    pub spacing: u8,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SpeedLevel {
     pub level: u8,
@@ -51,6 +60,7 @@ pub struct SpeedLevel {
     pub carrier_freqs_hz: &'static [u16],
     /// OFDM levels only: FFT bin of the lowest subcarrier.
     first_bin: Option<u8>,
+    pub fsk: Option<FskParams>,
 }
 
 impl Modulation {
@@ -135,6 +145,7 @@ const fn fsk(level: u8, tones: u8, nominal_baud: u8, net_bps: u16, frame_symbols
         pilots_per_carrier: None,
         carrier_freqs_hz: &[],
         first_bin: None,
+        fsk: None,
     }
 }
 
@@ -154,6 +165,7 @@ const fn tones(level: u8, modulation: Modulation, net_bps: u16, frame_symbols: u
         pilots_per_carrier: Some(pilots),
         carrier_freqs_hz: freqs,
         first_bin: None,
+        fsk: None,
     }
 }
 
@@ -173,6 +185,7 @@ const fn ofdm(level: u8, modulation: Modulation, carriers: u8, net_bps: u16, fra
         pilots_per_carrier: Some(pilots),
         carrier_freqs_hz: &[],
         first_bin: Some(OFDM_FFT / 2 - (carriers - 1) / 2),
+        fsk: None,
     }
 }
 

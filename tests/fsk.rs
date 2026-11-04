@@ -24,7 +24,7 @@ fn bits(n: usize, seed: u64) -> Vec<u8> {
         .collect()
 }
 
-// VARA's table at 0x53c0bc, rows for 2, 3 and 4 bits.
+// VARA's own table of FSK symbol values, rows for 2, 3 and 4 bits.
 #[test]
 fn symbol_values_are_inverse_gray() {
     assert_eq!((0..4).map(gray_decode).collect::<Vec<_>>(), [0, 1, 3, 2]);

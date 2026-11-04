@@ -196,6 +196,7 @@ tests/            tests per module; real-file tests run when VARA_DIR is set
 
 ---
 
-*vara-native is an independent project, not endorsed by, affiliated with, or
-derived from the original VARA software. "VARA" is used nominatively to
-identify the protocol with which this project interoperates.*
+*vara-native is an independent project, not endorsed by or affiliated with
+the original VARA software or its author, and it contains no code from it.
+"VARA" is used nominatively to identify the protocol with which this project
+interoperates.*

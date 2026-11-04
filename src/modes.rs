@@ -125,7 +125,8 @@ use Modulation::*;
 /// Frame payload: (K, N, code rate).
 type Fec = (u32, u32, (u8, u8));
 
-const fn fsk(level: u8, tones: u8, nominal_baud: u8, net_bps: u16, frame_symbols: u16, fec: Fec) -> SpeedLevel {
+/// FSK level; `tones` is the published carrier count, `p` the hopping parameters from the mode table.
+const fn fsk(level: u8, tones: u8, nominal_baud: u8, net_bps: u16, frame_symbols: u16, fec: Fec, p: FskParams) -> SpeedLevel {
     let samples_per_symbol = match nominal_baud {
         23 => 128,
         47 => 64,
@@ -145,8 +146,13 @@ const fn fsk(level: u8, tones: u8, nominal_baud: u8, net_bps: u16, frame_symbols
         pilots_per_carrier: None,
         carrier_freqs_hz: &[],
         first_bin: None,
-        fsk: None,
+        fsk: Some(p),
     }
+}
+
+/// (bits per symbol, first bin, last bin, spacing).
+const fn hop(bits: u8, first_bin: u8, last_bin: u8, spacing: u8) -> FskParams {
+    FskParams { bits, first_bin, last_bin, spacing }
 }
 
 /// Single-carrier PSK level at 94 baud, one tone per listed frequency.
@@ -196,9 +202,9 @@ const R45: (u8, u8) = (4, 5);
 const R56: (u8, u8) = (5, 6);
 
 const LEVELS_500: &[SpeedLevel] = &[
-    fsk(1, 11, 23, 18, 124, (96, 300, R13)),
-    fsk(2, 11, 47, 41, 228, (200, 612, R13)),
-    fsk(3, 11, 47, 61, 226, (297, 606, R12)),
+    fsk(1, 11, 23, 18, 124, (96, 300, R13), hop(3, 54, 74, 2)),
+    fsk(2, 11, 47, 41, 228, (200, 612, R13), hop(3, 27, 37, 1)),
+    fsk(3, 11, 47, 61, 226, (297, 606, R12), hop(3, 27, 37, 1)),
     tones(4, Bpsk, 88, 393, 18, &[1350, 1650], (368, 748, R12)),
     tones(5, Qpsk, 177, 394, 18, &[1350, 1650], (744, 1500, R12)),
     tones(6, Qpsk, 270, 375, 12, &[1320, 1500, 1680], (1080, 2172, R12)),
@@ -212,10 +218,10 @@ const LEVELS_500: &[SpeedLevel] = &[
 ];
 
 const LEVELS_2300: &[SpeedLevel] = &[
-    fsk(1, 32, 23, 18, 124, (96, 300, R13)),
-    fsk(2, 16, 47, 41, 228, (200, 612, R13)),
-    fsk(3, 16, 47, 82, 228, (402, 816, R12)),
-    fsk(4, 16, 94, 175, 395, (736, 1484, R12)),
+    fsk(1, 32, 23, 18, 124, (96, 300, R13), hop(3, 33, 96, 2)),
+    fsk(2, 16, 47, 41, 228, (200, 612, R13), hop(3, 17, 48, 2)),
+    fsk(3, 16, 47, 82, 228, (402, 816, R12), hop(4, 17, 48, 2)),
+    fsk(4, 16, 94, 175, 395, (736, 1484, R12), hop(4, 9, 24, 1)),
     tones(5, Qpsk, 270, 375, 12, &[900, 1500, 2100], (1080, 2172, R12)),
     tones(6, Qpsk, 363, 364, 9, &[750, 1250, 1750, 2250], (1410, 2832, R12)),
     tones(7, Qpsk, 549, 354, 6, &[700, 1020, 1340, 1660, 1980, 2300], (2076, 4164, R12)),
@@ -231,10 +237,10 @@ const LEVELS_2300: &[SpeedLevel] = &[
 ];
 
 const LEVELS_2750: &[SpeedLevel] = &[
-    fsk(1, 40, 23, 18, 124, (96, 300, R13)),
-    fsk(2, 20, 47, 41, 228, (200, 612, R13)),
-    fsk(3, 20, 47, 82, 228, (402, 816, R12)),
-    fsk(4, 20, 94, 175, 395, (736, 1484, R12)),
+    fsk(1, 40, 23, 18, 124, (96, 300, R13), hop(3, 24, 103, 2)),
+    fsk(2, 20, 47, 41, 228, (200, 612, R13), hop(3, 12, 51, 2)),
+    fsk(3, 20, 47, 82, 228, (402, 816, R12), hop(4, 12, 51, 2)),
+    fsk(4, 20, 94, 175, 395, (736, 1484, R12), hop(4, 6, 25, 1)),
     tones(5, Qpsk, 270, 375, 12, &[600, 1500, 2400], (1080, 2172, R12)),
     tones(6, Qpsk, 363, 364, 9, &[510, 1170, 1830, 2490], (1410, 2832, R12)),
     tones(7, Qpsk, 549, 354, 6, &[450, 870, 1290, 1710, 2130, 2550], (2076, 4164, R12)),
